@@ -205,22 +205,72 @@ func (d *Daemon) rebuildBinaries() error {
 
 	log.Printf("[deploy] Rebuilding binaries...")
 
+	// Find Go binary
+	goBin := d.findGoBinary()
+	if goBin == "" {
+		return fmt.Errorf("could not find go binary")
+	}
+	log.Printf("[deploy] Using Go binary: %s", goBin)
+
 	// Build vpn-node
-	cmd := exec.Command("go", "build", "-o", "bin/vpn-node", "./cmd/vpn-node")
+	cmd := exec.Command(goBin, "build", "-o", "bin/vpn-node", "./cmd/vpn-node")
 	cmd.Dir = projectRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build vpn-node: %w: %s", err, output)
 	}
 
 	// Build vpn CLI
-	cmd = exec.Command("go", "build", "-o", "bin/vpn", "./cmd/vpn")
+	cmd = exec.Command(goBin, "build", "-o", "bin/vpn", "./cmd/vpn")
 	cmd.Dir = projectRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to build vpn: %w: %s", err, output)
 	}
 
+	// Sign binaries on macOS
+	if d.isMacOS() {
+		log.Printf("[deploy] Signing binaries (macOS)...")
+		for _, bin := range []string{"bin/vpn-node", "bin/vpn"} {
+			cmd := exec.Command("codesign", "--sign", "-", "--force", bin)
+			cmd.Dir = projectRoot
+			if output, err := cmd.CombinedOutput(); err != nil {
+				log.Printf("[deploy] Warning: failed to sign %s: %v: %s", bin, err, output)
+			}
+		}
+	}
+
 	log.Printf("[deploy] Binaries rebuilt successfully")
 	return nil
+}
+
+// findGoBinary finds the Go binary in common locations.
+func (d *Daemon) findGoBinary() string {
+	// Common Go locations
+	locations := []string{
+		"/usr/local/go/bin/go",      // macOS default
+		"/usr/local/bin/go",         // Homebrew
+		"/opt/homebrew/bin/go",      // Apple Silicon Homebrew
+		"/usr/bin/go",               // Linux system
+		"/root/go/bin/go",           // Go installed in root home
+	}
+
+	// Try PATH first
+	if path, err := exec.LookPath("go"); err == nil {
+		return path
+	}
+
+	// Check common locations
+	for _, loc := range locations {
+		if _, err := os.Stat(loc); err == nil {
+			return loc
+		}
+	}
+
+	return ""
+}
+
+// isMacOS returns true if running on macOS.
+func (d *Daemon) isMacOS() bool {
+	return os.Getenv("HOME") != "" && strings.HasPrefix(os.Getenv("HOME"), "/Users/")
 }
 
 // broadcastUpdate sends UPDATE_AVAILABLE to all connected peers.

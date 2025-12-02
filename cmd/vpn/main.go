@@ -923,7 +923,7 @@ Examples:
 	return cmd
 }
 
-const cliVersion = "0.4.0"
+const cliVersion = "0.5.0"
 
 func versionCmd() *cobra.Command {
 	return &cobra.Command{
