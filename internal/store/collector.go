@@ -11,6 +11,7 @@ type Collector struct {
 	interval time.Duration
 	stopChan chan struct{}
 	wg       sync.WaitGroup
+	stopOnce sync.Once // Ensures Stop only runs once
 
 	// Metric sources (registered callbacks)
 	sources   map[string]MetricSource
@@ -53,9 +54,11 @@ func (c *Collector) Start() {
 	go c.collectLoop()
 }
 
-// Stop stops the collector.
+// Stop stops the collector. Safe to call multiple times.
 func (c *Collector) Stop() {
-	close(c.stopChan)
+	c.stopOnce.Do(func() {
+		close(c.stopChan)
+	})
 	c.wg.Wait()
 }
 

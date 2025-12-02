@@ -32,11 +32,12 @@ const (
 
 // Store manages SQLite storage for logs and metrics.
 type Store struct {
-	db       *sql.DB
-	dbPath   string
-	mu       sync.RWMutex
-	stopChan chan struct{}
-	wg       sync.WaitGroup
+	db        *sql.DB
+	dbPath    string
+	mu        sync.RWMutex
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
+	closeOnce sync.Once // Ensures Close only runs once
 
 	// Subscribers for real-time streaming
 	logSubs   map[chan *LogEntry]struct{}
@@ -249,11 +250,15 @@ func (s *Store) notifyLogSubscribers(entry *LogEntry) {
 	}
 }
 
-// Close closes the store.
+// Close closes the store. Safe to call multiple times.
 func (s *Store) Close() error {
-	close(s.stopChan)
-	s.wg.Wait()
-	return s.db.Close()
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.stopChan)
+		s.wg.Wait()
+		err = s.db.Close()
+	})
+	return err
 }
 
 func (s *Store) maintenanceLoop() {
