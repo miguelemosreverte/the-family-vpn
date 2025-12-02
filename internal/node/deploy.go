@@ -256,8 +256,10 @@ func (d *Daemon) scheduleRestart() {
 func (d *Daemon) findProjectRoot() string {
 	// Try common locations
 	locations := []string{
-		"/root/the-family-vpn",          // Server
-		os.Getenv("HOME") + "/the-family-vpn",
+		"/root/vpn-source",                       // Server (Hetzner)
+		"/root/the-family-vpn",                   // Server (legacy)
+		os.Getenv("HOME") + "/the-family-vpn",    // macOS clients
+		os.Getenv("HOME") + "/vpn",               // Alternative
 		".",
 	}
 
