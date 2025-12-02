@@ -153,6 +153,11 @@ func (d *Daemon) Run() error {
 		if err := d.startServer(); err != nil {
 			return fmt.Errorf("failed to start server: %w", err)
 		}
+
+		// Start deploy webhook server (on WebSocket port)
+		if err := d.StartDeployServer(d.config.ListenWS); err != nil {
+			log.Printf("[node] Warning: failed to start deploy server: %v", err)
+		}
 	} else {
 		// Client mode: connect to server, then create TUN
 		if err := d.startClient(); err != nil {
@@ -520,6 +525,11 @@ func (d *Daemon) forwardServerToTUN() {
 		if protocol.IsControlMessage(packet) {
 			cmd := protocol.ExtractControlCommand(packet)
 			log.Printf("[vpn] Control message: %s", cmd)
+
+			// Handle UPDATE_AVAILABLE from server
+			if cmd == protocol.CmdUpdateAvailable {
+				d.HandleUpdateMessage()
+			}
 			continue
 		}
 

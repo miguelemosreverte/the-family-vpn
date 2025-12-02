@@ -1,0 +1,47 @@
+name: Deploy VPN Network
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  trigger-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger network-wide deployment
+        run: |
+          # Hit the server's webhook endpoint to trigger cascade deployment
+          # The server will:
+          # 1. git pull
+          # 2. Check VERSION files to determine what needs updating
+          # 3. Rebuild and restart as needed
+          # 4. Broadcast UPDATE_AVAILABLE to all connected peers
+          # 5. Each peer does the same, propagating through the mesh
+
+          echo "Triggering deployment on well-known node..."
+
+          # Use curl to hit the webhook endpoint
+          # The server exposes this on its WebSocket port (9000)
+          response=$(curl -s -w "\n%{http_code}" -X POST \
+            "http://${{ secrets.SERVER_HOST }}:9000/deploy" \
+            -H "Content-Type: application/json" \
+            -H "X-Deploy-Token: ${{ secrets.DEPLOY_TOKEN }}" \
+            -d '{"ref": "${{ github.sha }}", "branch": "${{ github.ref_name }}"}' \
+            --connect-timeout 10 \
+            --max-time 30 || echo -e "\n000")
+
+          http_code=$(echo "$response" | tail -1)
+          body=$(echo "$response" | head -n -1)
+
+          echo "Response: $body"
+          echo "HTTP Code: $http_code"
+
+          if [ "$http_code" = "200" ] || [ "$http_code" = "202" ]; then
+            echo "✓ Deployment triggered successfully"
+            echo "The update will propagate through the VPN mesh network"
+          else
+            echo "✗ Failed to trigger deployment"
+            echo "HTTP $http_code: $body"
+            exit 1
+          fi
