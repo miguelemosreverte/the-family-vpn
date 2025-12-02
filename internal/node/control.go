@@ -13,7 +13,8 @@ import (
 	"github.com/miguelemosreverte/vpn/internal/store"
 )
 
-const version = "0.7.1"
+// Version is set at build time via -ldflags
+var Version = "dev"
 
 // handleControlConnection processes commands from a CLI client.
 func (d *Daemon) handleControlConnection(conn net.Conn) {
@@ -75,7 +76,7 @@ func (d *Daemon) handleStatus(enc *json.Encoder, req *protocol.Request) {
 
 	result := protocol.StatusResult{
 		NodeName:   d.config.NodeName,
-		Version:    version,
+		Version:    Version,
 		Uptime:     uptime,
 		UptimeStr:  formatDuration(uptime),
 		VPNAddress: d.config.VPNAddress,

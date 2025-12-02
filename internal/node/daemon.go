@@ -296,7 +296,7 @@ func (d *Daemon) startClient() error {
 	}
 
 	// Update topology with ourselves and the server
-	d.topology.SetOurInfo(d.config.NodeName, assignedIP, "", "darwin", version)
+	d.topology.SetOurInfo(d.config.NodeName, assignedIP, "", "darwin", Version)
 
 	// Add server as direct peer
 	// TODO: Server should send its name in the handshake response

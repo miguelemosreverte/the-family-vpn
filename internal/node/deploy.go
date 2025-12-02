@@ -54,7 +54,7 @@ func (d *Daemon) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "healthy",
 		"node":    d.config.NodeName,
 		"uptime":  d.Uptime().String(),
-		"version": version,
+		"version": Version,
 	})
 }
 
@@ -247,10 +247,18 @@ func (d *Daemon) rebuildBinariesSelective(updates VersionUpdates) error {
 
 	var binariesToSign []string
 
+	// Read version from VERSION file for ldflags
+	version := d.readVersionFile(filepath.Join(projectRoot, "services", "core", "VERSION"))
+	if version == "" {
+		version = "dev"
+	}
+	ldflags := fmt.Sprintf("-X github.com/miguelemosreverte/vpn/internal/node.Version=%s", version)
+	log.Printf("[deploy] Building with version: %s", version)
+
 	// Build vpn-node ONLY if node needs rebuild (core/websocket changed)
 	if updates.RebuildNode {
 		log.Printf("[deploy] Rebuilding vpn-node (COLD update)...")
-		cmd := exec.Command(goBin, "build", "-o", "bin/vpn-node", "./cmd/vpn-node")
+		cmd := exec.Command(goBin, "build", "-ldflags", ldflags, "-o", "bin/vpn-node", "./cmd/vpn-node")
 		cmd.Dir = projectRoot
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to build vpn-node: %w: %s", err, output)
@@ -261,7 +269,7 @@ func (d *Daemon) rebuildBinariesSelective(updates VersionUpdates) error {
 	// Build vpn CLI if CLI needs rebuild (cli/ui changed, or core changed)
 	if updates.RebuildCLI {
 		log.Printf("[deploy] Rebuilding vpn CLI (HOT update)...")
-		cmd := exec.Command(goBin, "build", "-o", "bin/vpn", "./cmd/vpn")
+		cmd := exec.Command(goBin, "build", "-ldflags", ldflags, "-o", "bin/vpn", "./cmd/vpn")
 		cmd.Dir = projectRoot
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to build vpn: %w: %s", err, output)
