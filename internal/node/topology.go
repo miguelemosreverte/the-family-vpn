@@ -4,24 +4,27 @@ package node
 import (
 	"sync"
 	"time"
+
+	"github.com/miguelemosreverte/vpn/internal/protocol"
 )
 
 // NetworkNode represents a node in the mesh network.
 type NetworkNode struct {
-	Name       string    `json:"name"`
-	VPNAddress string    `json:"vpn_address"`
-	PublicAddr string    `json:"public_addr,omitempty"`
-	OS         string    `json:"os,omitempty"`
-	Version    string    `json:"version,omitempty"`
-	Distance   int       `json:"distance"`          // Hop count from us (0 = us, 1 = direct, 2+ = via relay)
-	LatencyMs  float64   `json:"latency_ms"`        // RTT in milliseconds
-	Bandwidth  float64   `json:"bandwidth_bps"`     // Estimated bandwidth in bytes/sec
-	IsUs       bool      `json:"is_us"`             // True if this is our node
-	IsDirect   bool      `json:"is_direct"`         // True if directly connected
-	ConnectedAt time.Time `json:"connected_at,omitempty"`
-	LastSeen   time.Time `json:"last_seen"`
-	BytesIn    uint64    `json:"bytes_in"`
-	BytesOut   uint64    `json:"bytes_out"`
+	Name        string               `json:"name"`
+	VPNAddress  string               `json:"vpn_address"`
+	PublicAddr  string               `json:"public_addr,omitempty"`
+	OS          string               `json:"os,omitempty"`
+	Version     string               `json:"version,omitempty"`
+	Distance    int                  `json:"distance"`          // Hop count from us (0 = us, 1 = direct, 2+ = via relay)
+	LatencyMs   float64              `json:"latency_ms"`        // RTT in milliseconds
+	Bandwidth   float64              `json:"bandwidth_bps"`     // Estimated bandwidth in bytes/sec
+	IsUs        bool                 `json:"is_us"`             // True if this is our node
+	IsDirect    bool                 `json:"is_direct"`         // True if directly connected
+	ConnectedAt time.Time            `json:"connected_at,omitempty"`
+	LastSeen    time.Time            `json:"last_seen"`
+	BytesIn     uint64               `json:"bytes_in"`
+	BytesOut    uint64               `json:"bytes_out"`
+	Geo         *protocol.GeoLocation `json:"geo,omitempty"` // Geographic location
 
 	// Connections to other nodes (for graph visualization)
 	Connections []string `json:"connections,omitempty"` // VPN addresses of connected peers

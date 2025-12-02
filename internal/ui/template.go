@@ -8,7 +8,8 @@ func init() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VPN Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
@@ -496,7 +497,7 @@ func init() {
             to { transform: rotate(360deg); }
         }
 
-        /* Network Graph */
+        /* Network Graph / Map */
         .network-graph-container {
             background: var(--bg-secondary);
             border-radius: 12px;
@@ -520,8 +521,62 @@ func init() {
 
         #network-graph {
             width: 100%;
-            height: 400px;
+            height: 450px;
             background: var(--bg-primary);
+        }
+
+        /* Leaflet customizations for dark theme */
+        .leaflet-container {
+            background: #1a1a2e;
+        }
+
+        .leaflet-popup-content-wrapper {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-radius: 8px;
+        }
+
+        .leaflet-popup-tip {
+            background: var(--bg-secondary);
+        }
+
+        .leaflet-popup-content {
+            margin: 12px;
+        }
+
+        .node-popup {
+            min-width: 180px;
+        }
+
+        .node-popup-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .node-popup-info {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .node-popup-info strong {
+            color: var(--text-primary);
+        }
+
+        /* Great circle arc animation */
+        .leaflet-arc-path {
+            stroke-dasharray: 10, 5;
+            animation: dash-flow 20s linear infinite;
+        }
+
+        @keyframes dash-flow {
+            to {
+                stroke-dashoffset: -1000;
+            }
         }
 
         /* Distance badges */
@@ -1292,12 +1347,13 @@ func init() {
                 <h1 class="page-title">Network Topology</h1>
             </div>
 
-            <!-- Network Graph -->
+            <!-- Network Map -->
             <div class="network-graph-container">
                 <div class="graph-header">
-                    <span class="graph-title">Network Graph</span>
+                    <span class="graph-title">Network Map</span>
                     <div class="chart-controls">
-                        <button class="chart-btn" onclick="fitNetworkGraph()">Fit to Screen</button>
+                        <button class="chart-btn" onclick="fitNetworkMap()">Fit to Nodes</button>
+                        <button class="chart-btn" onclick="toggleMapStyle()">Toggle Style</button>
                     </div>
                 </div>
                 <div id="network-graph"></div>
@@ -2072,11 +2128,32 @@ func init() {
             return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
 
-        // Network graph instance
-        let networkGraph = null;
+        // Leaflet map instance
+        let networkMap = null;
+        let mapMarkers = [];
+        let mapArcs = [];
         let topologyData = { nodes: [], edges: [] };
         let topologySortBy = 'distance';
         let topologySortAsc = true;
+        let currentMapStyle = 'dark';
+
+        // Map tile layers
+        const mapTiles = {
+            dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }),
+            light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }),
+            satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: '&copy; Esri',
+                maxZoom: 19
+            })
+        };
 
         // Load peers/topology page
         async function loadPeers() {
@@ -2099,7 +2176,7 @@ func init() {
 
                 topologyData = data;
 
-                renderNetworkGraph(data);
+                renderNetworkMap(data);
                 renderTopologyTable(data.nodes || []);
 
                 // Update node count with VPN status
@@ -2113,107 +2190,197 @@ func init() {
             }
         }
 
-        // Render vis.js network graph - Hub-and-Spoke topology
-        // Helsinki (10.8.0.1) is the hub, all other nodes connect through it
+        // Render Leaflet map with nodes and great circle arcs
         const HELSINKI_VPN_IP = '10.8.0.1';
+        // Default Helsinki coordinates if geo not available
+        const HELSINKI_DEFAULT = { lat: 60.1699, lon: 24.9384 };
 
-        function renderNetworkGraph(data) {
+        function renderNetworkMap(data) {
             const container = document.getElementById('network-graph');
             const nodes = data.nodes || [];
 
-            // Find Helsinki (the hub)
-            const helsinkiNode = nodes.find(n => n.vpn_address === HELSINKI_VPN_IP);
-
-            // Create nodes for vis.js
-            const visNodes = nodes.map(n => {
-                let color = '#3b82f6'; // Default blue
-                let shape = 'dot';
-                let size = 20;
-
-                // Helsinki is the central hub
-                if (n.vpn_address === HELSINKI_VPN_IP) {
-                    color = '#22c55e'; // Green for the hub
-                    shape = 'diamond';
-                    size = 35;
-                } else if (n.is_us) {
-                    color = '#8b5cf6'; // Purple for ourselves
-                    shape = 'star';
-                    size = 30;
-                } else {
-                    color = '#3b82f6'; // Blue for other peers
-                }
-
-                return {
-                    id: n.vpn_address || n.name,
-                    label: n.name || n.vpn_address,
-                    color: {
-                        background: color,
-                        border: color,
-                        highlight: { background: color, border: '#fff' }
-                    },
-                    shape: shape,
-                    size: size,
-                    font: { color: '#f8fafc', size: 12 },
-                    title: ` + "`" + `${n.name}\\nVPN: ${n.vpn_address}\\nDistance: ${n.distance} hop(s)\\nLatency: ${n.latency_ms ? n.latency_ms.toFixed(1) + 'ms' : 'N/A'}` + "`" + `
-                };
-            });
-
-            // Create edges for vis.js - Hub-and-Spoke topology
-            // Every node connects ONLY to Helsinki (the hub)
-            // No direct edges between client nodes
-            const visEdges = [];
-            if (helsinkiNode) {
-                nodes.forEach(n => {
-                    // Skip Helsinki itself
-                    if (n.vpn_address === HELSINKI_VPN_IP) return;
-
-                    visEdges.push({
-                        from: n.vpn_address || n.name,
-                        to: HELSINKI_VPN_IP,
-                        color: { color: '#22c55e', opacity: 0.8 },
-                        width: 2,
-                        dashes: false,
-                        title: ` + "`" + `Connection to Helsinki hub\\nLatency: ${n.latency_ms ? n.latency_ms.toFixed(1) + 'ms' : 'N/A'}` + "`" + `
-                    });
+            // Initialize map if not exists
+            if (!networkMap) {
+                networkMap = L.map(container, {
+                    center: [45, 10], // Center on Europe initially
+                    zoom: 3,
+                    zoomControl: true,
+                    attributionControl: true
                 });
+                mapTiles.dark.addTo(networkMap);
             }
 
-            // vis.js options
-            const options = {
-                nodes: {
-                    borderWidth: 2,
-                    shadow: true
-                },
-                edges: {
-                    smooth: {
-                        type: 'continuous'
-                    }
-                },
-                physics: {
-                    stabilization: { iterations: 100 },
-                    barnesHut: {
-                        gravitationalConstant: -2000,
-                        springLength: 150
-                    }
-                },
-                interaction: {
-                    hover: true,
-                    tooltipDelay: 100
-                }
-            };
+            // Clear existing markers and arcs
+            mapMarkers.forEach(m => networkMap.removeLayer(m));
+            mapArcs.forEach(a => networkMap.removeLayer(a));
+            mapMarkers = [];
+            mapArcs = [];
 
-            // Create or update the network
-            if (networkGraph) {
-                networkGraph.setData({ nodes: visNodes, edges: visEdges });
-            } else {
-                networkGraph = new vis.Network(container, { nodes: visNodes, edges: visEdges }, options);
+            // Find Helsinki (the hub)
+            const helsinkiNode = nodes.find(n => n.vpn_address === HELSINKI_VPN_IP);
+            const helsinkiCoords = helsinkiNode?.geo
+                ? [helsinkiNode.geo.lat, helsinkiNode.geo.lon]
+                : [HELSINKI_DEFAULT.lat, HELSINKI_DEFAULT.lon];
+
+            // Add markers for each node
+            const bounds = [];
+            nodes.forEach(n => {
+                // Get coordinates from geo data, or use defaults
+                let lat, lon;
+                if (n.geo && n.geo.lat && n.geo.lon) {
+                    lat = n.geo.lat;
+                    lon = n.geo.lon;
+                } else if (n.vpn_address === HELSINKI_VPN_IP) {
+                    lat = HELSINKI_DEFAULT.lat;
+                    lon = HELSINKI_DEFAULT.lon;
+                } else {
+                    // No geo data available - skip this node on map
+                    return;
+                }
+
+                bounds.push([lat, lon]);
+
+                // Determine marker style
+                let color = '#3b82f6'; // Default blue
+                let radius = 8;
+                let zIndex = 100;
+
+                if (n.vpn_address === HELSINKI_VPN_IP) {
+                    color = '#22c55e'; // Green for the hub
+                    radius = 12;
+                    zIndex = 200;
+                } else if (n.is_us) {
+                    color = '#8b5cf6'; // Purple for ourselves
+                    radius = 10;
+                    zIndex = 150;
+                }
+
+                // Create circle marker
+                const marker = L.circleMarker([lat, lon], {
+                    radius: radius,
+                    fillColor: color,
+                    color: '#fff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.9
+                });
+
+                // Build popup content
+                const location = n.geo ? ` + "`" + `${n.geo.city || ''}, ${n.geo.country || ''}` + "`" + `.replace(/^, |, $/g, '') : 'Unknown';
+                const popupContent = ` + "`" + `
+                    <div class="node-popup">
+                        <div class="node-popup-name">
+                            ${n.is_us ? '⭐' : (n.vpn_address === HELSINKI_VPN_IP ? '🌐' : '💻')}
+                            ${n.name || 'Unknown'}
+                            ${n.is_us ? '<span class="you-badge">YOU</span>' : ''}
+                        </div>
+                        <div class="node-popup-info">
+                            <strong>VPN IP:</strong> ${n.vpn_address || '-'}<br>
+                            <strong>Location:</strong> ${location}<br>
+                            <strong>Distance:</strong> ${n.distance === 0 ? 'Local' : n.distance + ' hop(s)'}<br>
+                            ${n.latency_ms ? '<strong>Latency:</strong> ' + n.latency_ms.toFixed(1) + ' ms<br>' : ''}
+                            ${n.geo?.isp ? '<strong>ISP:</strong> ' + n.geo.isp + '<br>' : ''}
+                        </div>
+                    </div>
+                ` + "`" + `;
+
+                marker.bindPopup(popupContent);
+                marker.addTo(networkMap);
+                mapMarkers.push(marker);
+
+                // Draw great circle arc to Helsinki hub (if not Helsinki itself)
+                if (n.vpn_address !== HELSINKI_VPN_IP && helsinkiCoords) {
+                    const arc = drawGreatCircleArc([lat, lon], helsinkiCoords, color);
+                    if (arc) {
+                        arc.addTo(networkMap);
+                        mapArcs.push(arc);
+                    }
+                }
+            });
+
+            // Fit map to show all nodes
+            if (bounds.length > 1) {
+                networkMap.fitBounds(bounds, { padding: [50, 50] });
+            } else if (bounds.length === 1) {
+                networkMap.setView(bounds[0], 5);
             }
         }
 
-        function fitNetworkGraph() {
-            if (networkGraph) {
-                networkGraph.fit({ animation: true });
+        // Draw a great circle arc between two points
+        function drawGreatCircleArc(from, to, color) {
+            const points = calculateGreatCircle(from, to, 50);
+
+            const polyline = L.polyline(points, {
+                color: color,
+                weight: 2,
+                opacity: 0.7,
+                dashArray: '10, 5',
+                className: 'leaflet-arc-path'
+            });
+
+            return polyline;
+        }
+
+        // Calculate points along a great circle arc
+        function calculateGreatCircle(from, to, numPoints) {
+            const points = [];
+            const lat1 = from[0] * Math.PI / 180;
+            const lon1 = from[1] * Math.PI / 180;
+            const lat2 = to[0] * Math.PI / 180;
+            const lon2 = to[1] * Math.PI / 180;
+
+            for (let i = 0; i <= numPoints; i++) {
+                const f = i / numPoints;
+
+                // Spherical interpolation
+                const d = 2 * Math.asin(Math.sqrt(
+                    Math.pow(Math.sin((lat1 - lat2) / 2), 2) +
+                    Math.cos(lat1) * Math.cos(lat2) * Math.pow(Math.sin((lon1 - lon2) / 2), 2)
+                ));
+
+                if (d === 0) {
+                    points.push(from);
+                    continue;
+                }
+
+                const A = Math.sin((1 - f) * d) / Math.sin(d);
+                const B = Math.sin(f * d) / Math.sin(d);
+
+                const x = A * Math.cos(lat1) * Math.cos(lon1) + B * Math.cos(lat2) * Math.cos(lon2);
+                const y = A * Math.cos(lat1) * Math.sin(lon1) + B * Math.cos(lat2) * Math.sin(lon2);
+                const z = A * Math.sin(lat1) + B * Math.sin(lat2);
+
+                const lat = Math.atan2(z, Math.sqrt(x * x + y * y)) * 180 / Math.PI;
+                const lon = Math.atan2(y, x) * 180 / Math.PI;
+
+                points.push([lat, lon]);
             }
+
+            return points;
+        }
+
+        // Fit map to show all nodes
+        function fitNetworkMap() {
+            if (networkMap && mapMarkers.length > 0) {
+                const bounds = mapMarkers.map(m => m.getLatLng());
+                networkMap.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+
+        // Toggle map tile style
+        function toggleMapStyle() {
+            if (!networkMap) return;
+
+            const styles = ['dark', 'light', 'satellite'];
+            const currentIndex = styles.indexOf(currentMapStyle);
+            const nextIndex = (currentIndex + 1) % styles.length;
+            currentMapStyle = styles[nextIndex];
+
+            // Remove current tile layer
+            Object.values(mapTiles).forEach(t => networkMap.removeLayer(t));
+
+            // Add new tile layer
+            mapTiles[currentMapStyle].addTo(networkMap);
         }
 
         // Render topology table
@@ -2471,21 +2638,77 @@ func init() {
         // Also refresh connection status periodically
         setInterval(loadConnectionStatus, 10000);
 
-        // Update footer with version from status
+        // Version tracking for auto-refresh on deployment
+        let currentVersion = null;
+
+        // Update footer with version from status and check for version changes
         async function updateFooterVersion() {
             try {
                 const resp = await fetch('/api/status');
                 const data = await resp.json();
-                document.getElementById('footer-version').textContent = 'v' + (data.version || '0.0.0');
+                const newVersion = data.version || '0.0.0';
+
+                document.getElementById('footer-version').textContent = 'v' + newVersion;
                 document.getElementById('footer-node').textContent = data.node_name || 'Unknown';
                 document.getElementById('footer-status-dot').className = 'footer-status-dot';
+
+                // Check if version changed (deployment happened)
+                if (currentVersion !== null && currentVersion !== newVersion) {
+                    console.log('Version changed from', currentVersion, 'to', newVersion, '- reloading page...');
+                    showUpdateNotification(currentVersion, newVersion);
+                    // Give user a moment to see the notification, then reload
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                }
+                currentVersion = newVersion;
             } catch (e) {
                 document.getElementById('footer-version').textContent = 'v?.?.?';
                 document.getElementById('footer-status-dot').className = 'footer-status-dot offline';
             }
         }
+
+        // Show a notification when update is detected
+        function showUpdateNotification(oldVersion, newVersion) {
+            const notification = document.createElement('div');
+            notification.innerHTML = ` + "`" + `
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 24px;">🚀</span>
+                    <div>
+                        <div style="font-weight: 600;">New Version Deployed!</div>
+                        <div style="font-size: 12px; opacity: 0.8;">v${oldVersion} → v${newVersion}</div>
+                    </div>
+                </div>
+            ` + "`" + `;
+            notification.style.cssText = ` + "`" + `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+                color: white;
+                padding: 16px 24px;
+                border-radius: 12px;
+                font-size: 14px;
+                z-index: 10000;
+                box-shadow: 0 10px 40px rgba(59, 130, 246, 0.4);
+                animation: slideIn 0.3s ease-out;
+            ` + "`" + `;
+
+            // Add animation keyframes
+            const style = document.createElement('style');
+            style.textContent = ` + "`" + `
+                @keyframes slideIn {
+                    from { transform: translateX(100%); opacity: 0; }
+                    to { transform: translateX(0); opacity: 1; }
+                }
+            ` + "`" + `;
+            document.head.appendChild(style);
+            document.body.appendChild(notification);
+        }
+
         updateFooterVersion();
-        setInterval(updateFooterVersion, 30000);
+        // Check for version changes every 10 seconds
+        setInterval(updateFooterVersion, 10000);
     </script>
 
     <!-- Footer -->

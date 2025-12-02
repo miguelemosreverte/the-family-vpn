@@ -42,16 +42,17 @@ type StatusResult struct {
 
 // PeerInfo represents a connected peer.
 type PeerInfo struct {
-	Hostname   string    `json:"hostname"`
-	Name       string    `json:"name"`
-	VPNAddress string    `json:"vpn_address"`
-	PublicIP   string    `json:"public_ip,omitempty"`
-	OS         string    `json:"os,omitempty"`
-	Version    string    `json:"version,omitempty"`
-	Connected  time.Time `json:"connected"`
-	BytesIn    uint64    `json:"bytes_in"`
-	BytesOut   uint64    `json:"bytes_out"`
-	Latency    string    `json:"latency,omitempty"`
+	Hostname   string       `json:"hostname"`
+	Name       string       `json:"name"`
+	VPNAddress string       `json:"vpn_address"`
+	PublicIP   string       `json:"public_ip,omitempty"`
+	OS         string       `json:"os,omitempty"`
+	Version    string       `json:"version,omitempty"`
+	Connected  time.Time    `json:"connected"`
+	BytesIn    uint64       `json:"bytes_in"`
+	BytesOut   uint64       `json:"bytes_out"`
+	Latency    string       `json:"latency,omitempty"`
+	Geo        *GeoLocation `json:"geo,omitempty"`
 }
 
 // PeersResult is returned by the "peers" method.
@@ -61,21 +62,22 @@ type PeersResult struct {
 
 // NetworkNode represents a node in the mesh network topology.
 type NetworkNode struct {
-	Name        string    `json:"name"`
-	VPNAddress  string    `json:"vpn_address"`
-	PublicAddr  string    `json:"public_addr,omitempty"`
-	OS          string    `json:"os,omitempty"`
-	Version     string    `json:"version,omitempty"`
-	Distance    int       `json:"distance"`      // Hop count (0 = us, 1 = direct, 2+ = via relay)
-	LatencyMs   float64   `json:"latency_ms"`    // RTT in milliseconds
-	Bandwidth   float64   `json:"bandwidth_bps"` // Estimated bandwidth
-	IsUs        bool      `json:"is_us"`         // True if this is our node
-	IsDirect    bool      `json:"is_direct"`     // True if directly connected
-	ConnectedAt time.Time `json:"connected_at,omitempty"`
-	LastSeen    time.Time `json:"last_seen"`
-	BytesIn     uint64    `json:"bytes_in"`
-	BytesOut    uint64    `json:"bytes_out"`
-	Connections []string  `json:"connections,omitempty"` // VPN addresses of connected peers
+	Name        string       `json:"name"`
+	VPNAddress  string       `json:"vpn_address"`
+	PublicAddr  string       `json:"public_addr,omitempty"`
+	OS          string       `json:"os,omitempty"`
+	Version     string       `json:"version,omitempty"`
+	Distance    int          `json:"distance"`      // Hop count (0 = us, 1 = direct, 2+ = via relay)
+	LatencyMs   float64      `json:"latency_ms"`    // RTT in milliseconds
+	Bandwidth   float64      `json:"bandwidth_bps"` // Estimated bandwidth
+	IsUs        bool         `json:"is_us"`         // True if this is our node
+	IsDirect    bool         `json:"is_direct"`     // True if directly connected
+	ConnectedAt time.Time    `json:"connected_at,omitempty"`
+	LastSeen    time.Time    `json:"last_seen"`
+	BytesIn     uint64       `json:"bytes_in"`
+	BytesOut    uint64       `json:"bytes_out"`
+	Connections []string     `json:"connections,omitempty"` // VPN addresses of connected peers
+	Geo         *GeoLocation `json:"geo,omitempty"`
 }
 
 // NetworkEdge represents a connection between two nodes in the topology.

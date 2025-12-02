@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/miguelemosreverte/vpn/internal/geo"
 	"github.com/miguelemosreverte/vpn/internal/protocol"
 	"github.com/miguelemosreverte/vpn/internal/store"
 	"github.com/miguelemosreverte/vpn/internal/tunnel"
@@ -101,6 +102,10 @@ type Daemon struct {
 	connFailed     chan struct{} // Signals that VPN connection has failed
 	connFailedOnce sync.Once     // Ensures we only signal failure once
 
+	// Geolocation (looked up before VPN connects)
+	ourGeo      *protocol.GeoLocation // Our geolocation (real, before VPN)
+	ourPublicIP string                // Our public IP (real, before VPN)
+
 	// Shutdown
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -116,6 +121,7 @@ type Peer struct {
 	Connected  time.Time
 	BytesIn    uint64
 	BytesOut   uint64
+	Geo        *protocol.GeoLocation // Peer's geolocation (from handshake)
 }
 
 // New creates a new Daemon instance.
@@ -201,6 +207,18 @@ func (d *Daemon) Run() error {
 
 // startServer initializes server mode.
 func (d *Daemon) startServer() error {
+	// Lookup our geolocation (server's location)
+	log.Printf("[node] Looking up server geolocation...")
+	ourGeo, ourPublicIP, err := geo.LookupSelf()
+	if err != nil {
+		log.Printf("[node] Warning: failed to lookup server geolocation: %v", err)
+	} else {
+		d.ourGeo = ourGeo
+		d.ourPublicIP = ourPublicIP
+		log.Printf("[node] Server location: %s, %s (%.4f, %.4f) - IP: %s",
+			ourGeo.City, ourGeo.Country, ourGeo.Latitude, ourGeo.Longitude, ourPublicIP)
+	}
+
 	// Create TUN device
 	tunCfg := tunnel.Config{
 		LocalIP:   d.config.VPNAddress,
@@ -244,6 +262,20 @@ func (d *Daemon) startClient() error {
 	// Initialize connection failure channel
 	d.connFailed = make(chan struct{})
 
+	// IMPORTANT: Lookup geolocation BEFORE connecting to VPN
+	// This gets our real location, not the VPN exit location
+	log.Printf("[node] Looking up geolocation (before VPN connection)...")
+	ourGeo, ourPublicIP, err := geo.LookupSelf()
+	if err != nil {
+		log.Printf("[node] Warning: failed to lookup geolocation: %v", err)
+		// Continue without geo - not critical
+	} else {
+		d.ourGeo = ourGeo
+		d.ourPublicIP = ourPublicIP
+		log.Printf("[node] Our location: %s, %s (%.4f, %.4f) - IP: %s",
+			ourGeo.City, ourGeo.Country, ourGeo.Latitude, ourGeo.Longitude, ourPublicIP)
+	}
+
 	// Connect to server
 	dialCfg := tunnel.DialConfig{
 		Address:    d.config.ConnectTo,
@@ -257,12 +289,14 @@ func (d *Daemon) startClient() error {
 	}
 	d.vpnConn = conn
 
-	// Send handshake
+	// Send handshake with our geolocation
 	hostname, _ := os.Hostname()
 	peerInfo := protocol.PeerInfo{
 		Hostname: hostname,
 		OS:       "darwin", // TODO: detect OS
 		Version:  Version,
+		Geo:      d.ourGeo,
+		PublicIP: d.ourPublicIP,
 	}
 	if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
 		conn.Close()
@@ -373,6 +407,18 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 		return
 	}
 
+	// If peer didn't send geo, try to lookup from their public IP
+	peerGeo := peerInfo.Geo
+	if peerGeo == nil {
+		// Extract IP from remote address (host:port)
+		if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+			if lookedUp, err := geo.LookupIP(host); err == nil {
+				peerGeo = lookedUp
+				log.Printf("[vpn] Looked up geo for %s: %s, %s", host, lookedUp.City, lookedUp.Country)
+			}
+		}
+	}
+
 	// Register peer
 	d.mu.Lock()
 	d.peers[vpnIP] = &Peer{
@@ -381,6 +427,7 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 		PublicAddr: remoteAddr,
 		OS:         peerInfo.OS,
 		Connected:  time.Now(),
+		Geo:        peerGeo,
 	}
 	d.mu.Unlock()
 
@@ -845,6 +892,8 @@ func (d *Daemon) broadcastPeerList() {
 		VPNAddress: d.config.VPNAddress,
 		Hostname:   hostname,
 		OS:         "linux",
+		PublicIP:   d.ourPublicIP,
+		Geo:        d.ourGeo,
 	})
 
 	// Add all connected clients
@@ -854,6 +903,8 @@ func (d *Daemon) broadcastPeerList() {
 			VPNAddress: p.VPNAddress,
 			Hostname:   p.Name,
 			OS:         p.OS,
+			PublicIP:   p.PublicAddr,
+			Geo:        p.Geo,
 		})
 	}
 	d.mu.RUnlock()
@@ -903,6 +954,7 @@ func (d *Daemon) handlePeerListMessage(packet []byte) {
 				VPNAddress: p.VPNAddress,
 				OS:         p.OS,
 				IsDirect:   p.VPNAddress == "10.8.0.1", // Only server is direct
+				Geo:        p.Geo,
 			})
 		}
 	}

@@ -147,12 +147,23 @@ const (
 	CmdUpdateAvailable = "UPDATE_AVAILABLE"
 )
 
+// GeoLocation represents geographical coordinates and location info.
+type GeoLocation struct {
+	Latitude  float64 `json:"lat"`
+	Longitude float64 `json:"lon"`
+	City      string  `json:"city,omitempty"`
+	Country   string  `json:"country,omitempty"`
+	ISP       string  `json:"isp,omitempty"`
+}
+
 // PeerListEntry is a peer in the PEER_LIST message.
 type PeerListEntry struct {
-	Name       string `json:"name"`
-	VPNAddress string `json:"vpn_address"`
-	Hostname   string `json:"hostname"`
-	OS         string `json:"os"`
+	Name       string       `json:"name"`
+	VPNAddress string       `json:"vpn_address"`
+	Hostname   string       `json:"hostname"`
+	OS         string       `json:"os"`
+	PublicIP   string       `json:"public_ip,omitempty"`
+	Geo        *GeoLocation `json:"geo,omitempty"`
 }
 
 // MakePeerListMessage creates a PEER_LIST control message.
