@@ -282,9 +282,8 @@ func (c *Client) NetworkPeers() (*protocol.NetworkPeersResult, error) {
 // Lifecycle retrieves recent lifecycle events.
 func (c *Client) Lifecycle(limit int) (*protocol.LifecycleResult, error) {
 	params := protocol.LifecycleParams{Limit: limit}
-	paramsJSON, _ := json.Marshal(params)
 
-	resp, err := c.call("lifecycle", paramsJSON)
+	resp, err := c.call("lifecycle", params)
 	if err != nil {
 		return nil, err
 	}
@@ -304,9 +303,8 @@ func (c *Client) Lifecycle(limit int) (*protocol.LifecycleResult, error) {
 // CrashStats retrieves crash statistics.
 func (c *Client) CrashStats(since string) (*protocol.CrashStatsResult, error) {
 	params := protocol.CrashStatsParams{Since: since}
-	paramsJSON, _ := json.Marshal(params)
 
-	resp, err := c.call("crash_stats", paramsJSON)
+	resp, err := c.call("crash_stats", params)
 	if err != nil {
 		return nil, err
 	}
