@@ -253,7 +253,7 @@ func (d *Daemon) startClient() error {
 	peerInfo := protocol.PeerInfo{
 		Hostname: hostname,
 		OS:       "darwin", // TODO: detect OS
-		Version:  "0.1.0",
+		Version:  Version,
 	}
 	if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
 		conn.Close()
