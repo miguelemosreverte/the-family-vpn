@@ -103,25 +103,27 @@ func (d *Daemon) performDeploy(req DeployRequest) {
 	// 2. Check what needs updating based on VERSION files
 	updates := d.checkVersionChanges()
 
-	// 3. Rebuild binaries if needed
-	if updates.NeedsRebuild {
-		if err := d.rebuildBinaries(); err != nil {
+	// 3. Rebuild binaries selectively
+	if updates.RebuildNode || updates.RebuildCLI {
+		if err := d.rebuildBinariesSelective(updates); err != nil {
 			log.Printf("[deploy] Rebuild failed: %v", err)
 			return
 		}
+	} else {
+		log.Printf("[deploy] No rebuilds needed")
 	}
 
 	// 4. Broadcast UPDATE_AVAILABLE to all connected peers
 	d.broadcastUpdate()
 
-	// 5. Restart services if needed (after broadcast so clients get notified)
+	// 5. Restart node ONLY if frozen/cold layer changed
 	if updates.RestartNode {
-		log.Printf("[deploy] Node restart required, scheduling...")
+		log.Printf("[deploy] Node restart required (core/websocket changed), scheduling...")
 		// Give peers time to receive the update notification
 		time.Sleep(2 * time.Second)
 		d.scheduleRestart()
-	} else if updates.RestartCLI {
-		log.Printf("[deploy] CLI-only update, no restart needed")
+	} else if updates.RebuildCLI {
+		log.Printf("[deploy] HOT update complete - CLI/UI rebuilt, VPN connection uninterrupted")
 	}
 
 	log.Printf("[deploy] Deployment complete on %s", d.config.NodeName)
@@ -129,46 +131,78 @@ func (d *Daemon) performDeploy(req DeployRequest) {
 
 // VersionUpdates indicates what needs to be updated.
 type VersionUpdates struct {
-	NeedsRebuild bool
-	RestartNode  bool
-	RestartCLI   bool
+	RebuildNode bool // Rebuild vpn-node binary
+	RebuildCLI  bool // Rebuild vpn CLI binary
+	RestartNode bool // Restart vpn-node service (interrupts VPN)
 }
 
 // checkVersionChanges checks VERSION files to determine what changed.
+// Service layers:
+//   - core, websocket: FROZEN/COLD - requires node restart
+//   - cli, ui: HOT - no node restart, just rebuild CLI binary
 func (d *Daemon) checkVersionChanges() VersionUpdates {
 	// Find project root (where go.mod is)
 	projectRoot := d.findProjectRoot()
 	if projectRoot == "" {
 		log.Printf("[deploy] Could not find project root, assuming full rebuild")
-		return VersionUpdates{NeedsRebuild: true, RestartNode: true}
+		return VersionUpdates{RebuildNode: true, RebuildCLI: true, RestartNode: true}
 	}
 
 	updates := VersionUpdates{}
 
-	// Check services/core/VERSION for node changes
+	// === FROZEN/COLD layer: core and websocket ===
+	// These require node restart (interrupts VPN connection)
+
+	// Check services/core/VERSION for core node changes
 	coreVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "core", "VERSION"))
 	storedCoreVersion := d.readStoredVersion("core")
 	if coreVersion != storedCoreVersion && coreVersion != "" {
 		log.Printf("[deploy] Core version changed: %s -> %s", storedCoreVersion, coreVersion)
-		updates.NeedsRebuild = true
+		updates.RebuildNode = true
+		updates.RebuildCLI = true // CLI depends on some node packages
 		updates.RestartNode = true
 		d.storeVersion("core", coreVersion)
 	}
+
+	// Check services/websocket/VERSION for websocket changes
+	wsVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "websocket", "VERSION"))
+	storedWSVersion := d.readStoredVersion("websocket")
+	if wsVersion != storedWSVersion && wsVersion != "" {
+		log.Printf("[deploy] WebSocket version changed: %s -> %s", storedWSVersion, wsVersion)
+		updates.RebuildNode = true
+		updates.RestartNode = true
+		d.storeVersion("websocket", wsVersion)
+	}
+
+	// === HOT layer: cli and ui ===
+	// These do NOT require node restart (VPN stays connected)
 
 	// Check services/cli/VERSION for CLI changes
 	cliVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "cli", "VERSION"))
 	storedCLIVersion := d.readStoredVersion("cli")
 	if cliVersion != storedCLIVersion && cliVersion != "" {
-		log.Printf("[deploy] CLI version changed: %s -> %s", storedCLIVersion, cliVersion)
-		updates.NeedsRebuild = true
-		updates.RestartCLI = true
+		log.Printf("[deploy] CLI version changed: %s -> %s (HOT update, no restart)", storedCLIVersion, cliVersion)
+		updates.RebuildCLI = true
+		// NO RestartNode - this is a hot update!
 		d.storeVersion("cli", cliVersion)
 	}
 
-	// If no VERSION files, always rebuild (simple approach)
-	if !updates.NeedsRebuild {
-		log.Printf("[deploy] No VERSION file changes detected, rebuilding anyway")
-		updates.NeedsRebuild = true
+	// Check services/ui/VERSION for UI changes
+	uiVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "ui", "VERSION"))
+	storedUIVersion := d.readStoredVersion("ui")
+	if uiVersion != storedUIVersion && uiVersion != "" {
+		log.Printf("[deploy] UI version changed: %s -> %s (HOT update, no restart)", storedUIVersion, uiVersion)
+		updates.RebuildCLI = true // UI is built into CLI binary
+		// NO RestartNode - this is a hot update!
+		d.storeVersion("ui", uiVersion)
+	}
+
+	// Log summary
+	if !updates.RebuildNode && !updates.RebuildCLI {
+		log.Printf("[deploy] No VERSION file changes detected")
+	} else {
+		log.Printf("[deploy] Update summary: RebuildNode=%v, RebuildCLI=%v, RestartNode=%v",
+			updates.RebuildNode, updates.RebuildCLI, updates.RestartNode)
 	}
 
 	return updates
@@ -196,14 +230,12 @@ func (d *Daemon) gitPull() error {
 	return nil
 }
 
-// rebuildBinaries rebuilds the VPN binaries.
-func (d *Daemon) rebuildBinaries() error {
+// rebuildBinariesSelective rebuilds only the binaries that changed.
+func (d *Daemon) rebuildBinariesSelective(updates VersionUpdates) error {
 	projectRoot := d.findProjectRoot()
 	if projectRoot == "" {
 		return fmt.Errorf("could not find project root")
 	}
-
-	log.Printf("[deploy] Rebuilding binaries...")
 
 	// Find Go binary
 	goBin := d.findGoBinary()
@@ -212,24 +244,34 @@ func (d *Daemon) rebuildBinaries() error {
 	}
 	log.Printf("[deploy] Using Go binary: %s", goBin)
 
-	// Build vpn-node
-	cmd := exec.Command(goBin, "build", "-o", "bin/vpn-node", "./cmd/vpn-node")
-	cmd.Dir = projectRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to build vpn-node: %w: %s", err, output)
+	var binariesToSign []string
+
+	// Build vpn-node ONLY if node needs rebuild (core/websocket changed)
+	if updates.RebuildNode {
+		log.Printf("[deploy] Rebuilding vpn-node (COLD update)...")
+		cmd := exec.Command(goBin, "build", "-o", "bin/vpn-node", "./cmd/vpn-node")
+		cmd.Dir = projectRoot
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to build vpn-node: %w: %s", err, output)
+		}
+		binariesToSign = append(binariesToSign, "bin/vpn-node")
 	}
 
-	// Build vpn CLI
-	cmd = exec.Command(goBin, "build", "-o", "bin/vpn", "./cmd/vpn")
-	cmd.Dir = projectRoot
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to build vpn: %w: %s", err, output)
+	// Build vpn CLI if CLI needs rebuild (cli/ui changed, or core changed)
+	if updates.RebuildCLI {
+		log.Printf("[deploy] Rebuilding vpn CLI (HOT update)...")
+		cmd := exec.Command(goBin, "build", "-o", "bin/vpn", "./cmd/vpn")
+		cmd.Dir = projectRoot
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to build vpn: %w: %s", err, output)
+		}
+		binariesToSign = append(binariesToSign, "bin/vpn")
 	}
 
-	// Sign binaries on macOS
-	if d.isMacOS() {
+	// Sign rebuilt binaries on macOS
+	if d.isMacOS() && len(binariesToSign) > 0 {
 		log.Printf("[deploy] Signing binaries (macOS)...")
-		for _, bin := range []string{"bin/vpn-node", "bin/vpn"} {
+		for _, bin := range binariesToSign {
 			cmd := exec.Command("codesign", "--sign", "-", "--force", bin)
 			cmd.Dir = projectRoot
 			if output, err := cmd.CombinedOutput(); err != nil {
@@ -238,7 +280,7 @@ func (d *Daemon) rebuildBinaries() error {
 		}
 	}
 
-	log.Printf("[deploy] Binaries rebuilt successfully")
+	log.Printf("[deploy] Selective rebuild complete")
 	return nil
 }
 
