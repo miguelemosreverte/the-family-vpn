@@ -24,6 +24,7 @@ type Server struct {
 	nodeAddr   string
 	listenAddr string
 	client     *cli.Client
+	quiet      bool // suppress startup banner
 }
 
 // NewServer creates a new UI server.
@@ -31,6 +32,15 @@ func NewServer(nodeAddr, listenAddr string) *Server {
 	return &Server{
 		nodeAddr:   nodeAddr,
 		listenAddr: listenAddr,
+	}
+}
+
+// NewQuietServer creates a new UI server without startup banner.
+func NewQuietServer(nodeAddr, listenAddr string) *Server {
+	return &Server{
+		nodeAddr:   nodeAddr,
+		listenAddr: listenAddr,
+		quiet:      true,
 	}
 }
 
@@ -59,13 +69,15 @@ func (s *Server) Start() error {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
 	mux.HandleFunc("/", s.handleIndex)
 
-	fmt.Printf("\n")
-	fmt.Printf("  VPN Dashboard starting...\n")
-	fmt.Printf("  ────────────────────────────────────────\n")
-	fmt.Printf("  URL:  http://%s\n", s.listenAddr)
-	fmt.Printf("  Node: %s\n", s.nodeAddr)
-	fmt.Printf("  ────────────────────────────────────────\n")
-	fmt.Printf("  Press Ctrl+C to stop\n\n")
+	if !s.quiet {
+		fmt.Printf("\n")
+		fmt.Printf("  VPN Dashboard starting...\n")
+		fmt.Printf("  ────────────────────────────────────────\n")
+		fmt.Printf("  URL:  http://%s\n", s.listenAddr)
+		fmt.Printf("  Node: %s\n", s.nodeAddr)
+		fmt.Printf("  ────────────────────────────────────────\n")
+		fmt.Printf("  Press Ctrl+C to stop\n\n")
+	}
 
 	return http.ListenAndServe(s.listenAddr, mux)
 }

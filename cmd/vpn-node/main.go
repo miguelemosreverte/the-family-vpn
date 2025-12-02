@@ -20,10 +20,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 
 	"github.com/miguelemosreverte/vpn/internal/node"
+	"github.com/miguelemosreverte/vpn/internal/ui"
 )
 
 func main() {
@@ -45,6 +47,10 @@ func main() {
 
 	// Encryption flag
 	encryption := flag.Bool("encrypt", true, "Enable packet encryption (AES-256-GCM)")
+
+	// UI flag - serve web dashboard
+	listenUI := flag.String("listen-ui", "localhost:8080", "Web UI address (empty to disable)")
+	noUI := flag.Bool("no-ui", false, "Disable web UI")
 
 	// Routing flags - route-all defaults to true for VPN clients
 	routeAll := flag.Bool("route-all", true, "Route all traffic through VPN (client mode, enabled by default)")
@@ -127,6 +133,36 @@ func main() {
 			cfg.ListenVPN, cfg.ListenWS, cfg.ListenControl)
 	} else {
 		fmt.Printf("  Connecting to: %s\n\n", cfg.ConnectTo)
+	}
+
+	// Start UI server if enabled
+	if !*noUI && *listenUI != "" {
+		uiAddr := *listenUI
+		// Check if port is available
+		ln, err := net.Listen("tcp", uiAddr)
+		if err != nil {
+			log.Printf("[ui] Port %s not available, trying alternative ports...", uiAddr)
+			// Try alternative ports
+			for port := 8081; port <= 8090; port++ {
+				altAddr := fmt.Sprintf("localhost:%d", port)
+				ln, err = net.Listen("tcp", altAddr)
+				if err == nil {
+					uiAddr = altAddr
+					break
+				}
+			}
+		}
+		if ln != nil {
+			ln.Close()
+			// Start UI in background
+			go func() {
+				uiServer := ui.NewQuietServer(cfg.ListenControl, uiAddr)
+				log.Printf("[ui] Web dashboard available at http://%s", uiAddr)
+				if err := uiServer.Start(); err != nil {
+					log.Printf("[ui] Web dashboard error: %v", err)
+				}
+			}()
+		}
 	}
 
 	daemon := node.New(cfg)
