@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/miguelemosreverte/vpn/internal/protocol"
@@ -333,15 +334,45 @@ func (d *Daemon) broadcastUpdate() {
 	}
 }
 
-// scheduleRestart schedules a graceful restart of the node.
+// scheduleRestart performs a graceful restart of the node by exec'ing the new binary.
+// This replaces the current process with the newly built binary while preserving
+// command-line arguments and environment.
 func (d *Daemon) scheduleRestart() {
-	// For now, just log - in production you'd use systemd or supervisor
-	log.Printf("[deploy] Restart would be performed here")
-	log.Printf("[deploy] In production, use: systemctl restart vpn-node")
+	log.Printf("[deploy] Preparing to restart node with new binary...")
 
-	// You could also exec the new binary:
-	// executable, _ := os.Executable()
-	// syscall.Exec(executable, os.Args, os.Environ())
+	// Get the path to the currently running executable
+	executable, err := os.Executable()
+	if err != nil {
+		log.Printf("[deploy] ERROR: Cannot determine executable path: %v", err)
+		return
+	}
+
+	// Resolve any symlinks to get the real path
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		log.Printf("[deploy] ERROR: Cannot resolve executable path: %v", err)
+		return
+	}
+
+	log.Printf("[deploy] Restarting: %s %v", executable, os.Args[1:])
+
+	// Perform graceful shutdown first
+	d.shutdown()
+
+	// Small delay to ensure cleanup completes
+	time.Sleep(500 * time.Millisecond)
+
+	// Exec the new binary - this replaces the current process
+	// The new process inherits our PID, so any process manager watching us
+	// won't see a change
+	err = syscall.Exec(executable, os.Args, os.Environ())
+	if err != nil {
+		// If exec fails, we're in a bad state - the old binary is still running
+		// but we've already called Shutdown
+		log.Printf("[deploy] CRITICAL: Failed to exec new binary: %v", err)
+		log.Printf("[deploy] Process will exit - service manager should restart us")
+		os.Exit(1)
+	}
 }
 
 // findProjectRoot finds the project root directory (where go.mod is).
