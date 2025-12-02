@@ -102,8 +102,9 @@ type Daemon struct {
 	connFailedOnce sync.Once     // Ensures we only signal failure once
 
 	// Shutdown
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx          context.Context
+	cancel       context.CancelFunc
+	shutdownOnce sync.Once // Ensures shutdown only runs once
 }
 
 // Peer represents a connected peer node.
@@ -674,15 +675,19 @@ func (d *Daemon) metricsLoop() {
 	}
 }
 
-// shutdown gracefully stops the daemon.
+// shutdown gracefully stops the daemon. Safe to call multiple times.
 func (d *Daemon) shutdown() error {
-	log.Printf("[node] Shutting down...")
-	d.cancel()
+	d.shutdownOnce.Do(func() {
+		log.Printf("[node] Shutting down...")
+		d.cancel()
 
-	// Stop metrics collection
-	if d.metricsCollector != nil {
-		d.metricsCollector.Stop()
-	}
+		// Stop metrics collection
+		if d.metricsCollector != nil {
+			d.metricsCollector.Stop()
+		}
+	})
+
+	// These operations are idempotent, so they can be outside the Once
 
 	if d.vpnListener != nil {
 		d.vpnListener.Close()
