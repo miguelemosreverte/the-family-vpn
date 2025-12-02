@@ -63,6 +63,10 @@ func (d *Daemon) handleRequest(enc *json.Encoder, req *protocol.Request) {
 		d.handleTopology(enc, req)
 	case "network_peers":
 		d.handleNetworkPeers(enc, req)
+	case "lifecycle":
+		d.handleLifecycle(enc, req)
+	case "crash_stats":
+		d.handleCrashStats(enc, req)
 	default:
 		d.sendError(enc, req.ID, protocol.ErrCodeInvalidMethod,
 			fmt.Sprintf("unknown method: %s", req.Method))
@@ -490,4 +494,110 @@ func (d *Daemon) handleNetworkPeers(enc *json.Encoder, req *protocol.Request) {
 		Peers:      peers,
 		ServerMode: d.config.ServerMode,
 	})
+}
+
+// handleLifecycle returns recent lifecycle events.
+func (d *Daemon) handleLifecycle(enc *json.Encoder, req *protocol.Request) {
+	if d.store == nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, "storage not initialized")
+		return
+	}
+
+	var params protocol.LifecycleParams
+	if req.Params != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			d.sendError(enc, req.ID, protocol.ErrCodeInvalidParams, "invalid params")
+			return
+		}
+	}
+
+	if params.Limit <= 0 {
+		params.Limit = 20
+	}
+
+	events, err := d.store.GetLifecycleEvents(params.Limit)
+	if err != nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, fmt.Sprintf("query failed: %v", err))
+		return
+	}
+
+	// Convert to protocol format
+	protoEvents := make([]protocol.LifecycleEvent, len(events))
+	for i, e := range events {
+		protoEvents[i] = protocol.LifecycleEvent{
+			ID:            e.ID,
+			Timestamp:     e.Timestamp.Format(time.RFC3339),
+			Event:         e.Event,
+			Reason:        e.Reason,
+			UptimeSeconds: e.UptimeSeconds,
+			RouteAll:      e.RouteAll,
+			RouteRestored: e.RouteRestored,
+			Version:       e.Version,
+		}
+	}
+
+	d.sendResult(enc, req.ID, protocol.LifecycleResult{Events: protoEvents})
+}
+
+// handleCrashStats returns crash statistics.
+func (d *Daemon) handleCrashStats(enc *json.Encoder, req *protocol.Request) {
+	if d.store == nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, "storage not initialized")
+		return
+	}
+
+	var params protocol.CrashStatsParams
+	if req.Params != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			d.sendError(enc, req.ID, protocol.ErrCodeInvalidParams, "invalid params")
+			return
+		}
+	}
+
+	// Default: last 24 hours
+	since := params.Since
+	if since == "" {
+		since = "-24h"
+	}
+
+	// Parse time range
+	timeRange, err := store.ParseTimeRange(since, "now")
+	if err != nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("invalid time range: %v", err))
+		return
+	}
+
+	total, withRouteAll, restoreFailures, err := d.store.GetCrashStats(timeRange.Start)
+	if err != nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, fmt.Sprintf("query failed: %v", err))
+		return
+	}
+
+	// Get last crash
+	lastCrash, err := d.store.GetLastCrash()
+	if err != nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, fmt.Sprintf("query failed: %v", err))
+		return
+	}
+
+	result := protocol.CrashStatsResult{
+		TotalCrashes:         total,
+		CrashesWithRouteAll:  withRouteAll,
+		RouteRestoreFailures: restoreFailures,
+	}
+
+	if lastCrash != nil {
+		result.LastCrash = &protocol.LifecycleEvent{
+			ID:            lastCrash.ID,
+			Timestamp:     lastCrash.Timestamp.Format(time.RFC3339),
+			Event:         lastCrash.Event,
+			Reason:        lastCrash.Reason,
+			UptimeSeconds: lastCrash.UptimeSeconds,
+			RouteAll:      lastCrash.RouteAll,
+			RouteRestored: lastCrash.RouteRestored,
+			Version:       lastCrash.Version,
+		}
+	}
+
+	d.sendResult(enc, req.ID, result)
 }

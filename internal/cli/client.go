@@ -278,3 +278,47 @@ func (c *Client) NetworkPeers() (*protocol.NetworkPeersResult, error) {
 
 	return &result, nil
 }
+
+// Lifecycle retrieves recent lifecycle events.
+func (c *Client) Lifecycle(limit int) (*protocol.LifecycleResult, error) {
+	params := protocol.LifecycleParams{Limit: limit}
+	paramsJSON, _ := json.Marshal(params)
+
+	resp, err := c.call("lifecycle", paramsJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("server error: %s", resp.Error.Message)
+	}
+
+	var result protocol.LifecycleResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+// CrashStats retrieves crash statistics.
+func (c *Client) CrashStats(since string) (*protocol.CrashStatsResult, error) {
+	params := protocol.CrashStatsParams{Since: since}
+	paramsJSON, _ := json.Marshal(params)
+
+	resp, err := c.call("crash_stats", paramsJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("server error: %s", resp.Error.Message)
+	}
+
+	var result protocol.CrashStatsResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}

@@ -138,10 +138,11 @@ func (d *Daemon) Run() error {
 	log.Printf("[node] Starting VPN node: %s", d.config.NodeName)
 	log.Printf("[node] VPN Address: %s", d.config.VPNAddress)
 	log.Printf("[node] Mode: %s", map[bool]string{true: "SERVER", false: "CLIENT"}[d.config.ServerMode])
+	log.Printf("[node] Version: %s", Version)
 
-	// Setup signal handling
+	// Setup signal handling - catch all signals that could terminate us
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Initialize network topology tracker
 	d.topology = NewNetworkTopology(d.config.VPNAddress, d.config.NodeName)
@@ -149,6 +150,11 @@ func (d *Daemon) Run() error {
 	// Initialize storage
 	if err := d.initStorage(); err != nil {
 		log.Printf("[node] Warning: failed to init storage: %v (continuing without metrics)", err)
+	}
+
+	// Record startup event
+	if d.store != nil {
+		d.store.WriteLifecycleEvent("START", "Node starting", 0, d.config.RouteAll, false, Version)
 	}
 
 	// Start control socket server
@@ -180,14 +186,17 @@ func (d *Daemon) Run() error {
 	log.Printf("[node] Node is ready")
 
 	// Wait for shutdown signal
+	var shutdownReason string
 	select {
 	case sig := <-sigCh:
 		log.Printf("[node] Received signal: %v", sig)
+		shutdownReason = fmt.Sprintf("signal: %v", sig)
 	case <-d.ctx.Done():
 		log.Printf("[node] Context cancelled")
+		shutdownReason = "context cancelled"
 	}
 
-	return d.shutdown()
+	return d.shutdownWithReason(shutdownReason)
 }
 
 // startServer initializes server mode.
@@ -677,9 +686,42 @@ func (d *Daemon) metricsLoop() {
 
 // shutdown gracefully stops the daemon. Safe to call multiple times.
 func (d *Daemon) shutdown() error {
+	return d.shutdownWithReason("unknown")
+}
+
+// shutdownWithReason gracefully stops the daemon with a reason for logging.
+func (d *Daemon) shutdownWithReason(reason string) error {
+	var routeRestored bool
+	var routeRestoreErr error
+
 	d.shutdownOnce.Do(func() {
-		log.Printf("[node] Shutting down...")
+		log.Printf("[node] Shutting down (reason: %s)...", reason)
 		d.cancel()
+
+		// CRITICAL: Restore routing FIRST before anything else
+		// This ensures that even if subsequent cleanup fails, the user has internet
+		if d.tun != nil && d.config.RouteAll {
+			log.Printf("[node] Restoring network routes...")
+			routeRestoreErr = d.tun.RestoreRouting()
+			if routeRestoreErr != nil {
+				log.Printf("[node] ERROR: Failed to restore routing: %v", routeRestoreErr)
+				log.Printf("[node] Manual fix: sudo route delete default; sudo route add default <your-gateway>")
+			} else {
+				routeRestored = true
+				log.Printf("[node] Network routes restored successfully")
+			}
+		}
+
+		// Record shutdown event to database
+		if d.store != nil {
+			uptime := d.Uptime().Seconds()
+			eventType := "STOP"
+			// If reason contains "signal" it's a signal-triggered shutdown
+			if len(reason) > 6 && reason[:6] == "signal" {
+				eventType = "SIGNAL"
+			}
+			d.store.WriteLifecycleEvent(eventType, reason, uptime, d.config.RouteAll, routeRestored, Version)
+		}
 
 		// Stop metrics collection
 		if d.metricsCollector != nil {
@@ -705,7 +747,6 @@ func (d *Daemon) shutdown() error {
 	d.peerConnsMu.Unlock()
 
 	if d.tun != nil {
-		d.tun.RestoreRouting()
 		d.tun.Close()
 	}
 
@@ -713,13 +754,13 @@ func (d *Daemon) shutdown() error {
 		d.controlListener.Close()
 	}
 
-	// Close storage
+	// Close storage LAST so lifecycle events are written
 	if d.store != nil {
 		d.store.Close()
 	}
 
 	log.Printf("[node] Shutdown complete")
-	return nil
+	return routeRestoreErr
 }
 
 // startControlServer starts the control socket server.
@@ -982,16 +1023,24 @@ func (d *Daemon) monitorConnectionFailure() {
 		log.Printf("[vpn] VPN connection to server has been lost")
 		log.Printf("[vpn] Restoring network routes to prevent internet loss...")
 
+		routeRestored := false
 		if d.tun != nil && d.config.RouteAll {
 			if err := d.tun.RestoreRouting(); err != nil {
 				log.Printf("[vpn] ERROR: Failed to restore routing: %v", err)
 				log.Printf("[vpn] Manual intervention may be required!")
 				log.Printf("[vpn] Try: sudo route delete default; sudo route add default <your-gateway>")
 			} else {
+				routeRestored = true
 				log.Printf("[vpn] SUCCESS: Network routes restored")
 				log.Printf("[vpn] Internet connectivity should be working via direct connection")
 				d.config.RouteAll = false
 			}
+		}
+
+		// Record the connection loss event
+		if d.store != nil {
+			uptime := d.Uptime().Seconds()
+			d.store.WriteLifecycleEvent("CONNECTION_LOST", "VPN connection to server lost", uptime, true, routeRestored, Version)
 		}
 
 		log.Printf("[vpn] ========================================")

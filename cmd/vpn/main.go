@@ -62,6 +62,8 @@ Use --node to connect to a remote node.`,
 	rootCmd.AddCommand(sshCmd())
 	rootCmd.AddCommand(networkPeersCmd())
 	rootCmd.AddCommand(versionCmd())
+	rootCmd.AddCommand(crashesCmd())
+	rootCmd.AddCommand(lifecycleCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -1020,4 +1022,190 @@ Examples:
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 
 	return cmd
+}
+
+func crashesCmd() *cobra.Command {
+	var since string
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:     "crashes",
+		Aliases: []string{"crash", "crash-stats"},
+		Short:   "Show crash statistics and last crash details",
+		Long: `Show crash statistics and information about the last crash.
+
+This command helps diagnose VPN node stability issues by showing:
+- Total crashes in the time period
+- How many crashes had route-all enabled
+- How many times route restoration failed (which breaks internet)
+- Details of the most recent crash
+
+Examples:
+  vpn crashes                    # Show stats for last 24 hours
+  vpn crashes --since=-1h        # Show stats for last hour
+  vpn crashes --since=-7d        # Show stats for last week
+  vpn crashes --json             # JSON output for scripting`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			result, err := client.CrashStats(since)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				output, err := json.MarshalIndent(result, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(output))
+				return nil
+			}
+
+			fmt.Println("\nCrash Statistics")
+			fmt.Println("────────────────────────────────────────")
+			fmt.Printf("  Time Period:          %s to now\n", since)
+			fmt.Printf("  Total Crashes:        %d\n", result.TotalCrashes)
+			fmt.Printf("  With Route-All:       %d\n", result.CrashesWithRouteAll)
+
+			if result.RouteRestoreFailures > 0 {
+				fmt.Printf("  %sRoute Restore Fails:   %d%s (these break internet!)\n",
+					colorRed, result.RouteRestoreFailures, colorReset)
+			} else {
+				fmt.Printf("  Route Restore Fails:  %s0%s\n", colorGreen, colorReset)
+			}
+
+			if result.LastCrash != nil {
+				fmt.Println()
+				fmt.Println("Last Crash/Shutdown")
+				fmt.Println("────────────────────────────────────────")
+				fmt.Printf("  Time:           %s\n", result.LastCrash.Timestamp)
+				fmt.Printf("  Event:          %s\n", result.LastCrash.Event)
+				fmt.Printf("  Reason:         %s\n", result.LastCrash.Reason)
+				fmt.Printf("  Uptime:         %s\n", formatUptime(result.LastCrash.UptimeSeconds))
+				fmt.Printf("  Route-All:      %v\n", result.LastCrash.RouteAll)
+				if result.LastCrash.RouteAll {
+					if result.LastCrash.RouteRestored {
+						fmt.Printf("  Routes:         %sRestored%s\n", colorGreen, colorReset)
+					} else {
+						fmt.Printf("  Routes:         %sNOT RESTORED%s (internet was broken!)\n", colorRed, colorReset)
+					}
+				}
+				fmt.Printf("  Version:        %s\n", result.LastCrash.Version)
+			} else {
+				fmt.Println()
+				fmt.Println("No crashes recorded in this time period.")
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&since, "since", "-24h", "Time range (Splunk-like: -1h, -24h, -7d)")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func lifecycleCmd() *cobra.Command {
+	var limit int
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:     "lifecycle",
+		Aliases: []string{"events", "history"},
+		Short:   "Show recent lifecycle events (starts, stops, crashes)",
+		Long: `Show recent lifecycle events for the VPN node.
+
+Events include:
+- START: Node started
+- STOP: Clean shutdown
+- SIGNAL: Shutdown due to signal (SIGTERM, SIGINT)
+- CONNECTION_LOST: Connection to server was lost
+- CRASH: Unexpected termination
+
+Examples:
+  vpn lifecycle                 # Show last 20 events
+  vpn lifecycle --limit=50      # Show last 50 events
+  vpn lifecycle --json          # JSON output for scripting`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			result, err := client.Lifecycle(limit)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				output, err := json.MarshalIndent(result, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(output))
+				return nil
+			}
+
+			fmt.Println("\nLifecycle Events")
+			fmt.Println("────────────────────────────────────────────────────────────────────────────")
+			fmt.Printf("%-20s %-15s %-12s %-8s %s\n", "TIMESTAMP", "EVENT", "UPTIME", "ROUTES", "REASON")
+			fmt.Println("────────────────────────────────────────────────────────────────────────────")
+
+			for _, e := range result.Events {
+				// Parse and format timestamp
+				ts, _ := time.Parse(time.RFC3339, e.Timestamp)
+				tsStr := ts.Format("2006-01-02 15:04:05")
+
+				// Color the event
+				eventColor := ""
+				switch e.Event {
+				case "START":
+					eventColor = colorGreen
+				case "STOP":
+					eventColor = colorBlue
+				case "SIGNAL":
+					eventColor = colorYellow
+				case "CONNECTION_LOST", "CRASH":
+					eventColor = colorRed
+				}
+
+				routeStatus := "-"
+				if e.RouteAll {
+					if e.RouteRestored {
+						routeStatus = colorGreen + "OK" + colorReset
+					} else {
+						routeStatus = colorRed + "FAILED" + colorReset
+					}
+				}
+
+				fmt.Printf("%-20s %s%-15s%s %-12s %-8s %s\n",
+					tsStr,
+					eventColor, e.Event, colorReset,
+					formatUptime(e.UptimeSeconds),
+					routeStatus,
+					truncate(e.Reason, 30))
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of events to show")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
 }

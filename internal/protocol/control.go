@@ -185,6 +185,41 @@ type NetworkPeersResult struct {
 	ServerMode bool            `json:"server_mode"`
 }
 
+// LifecycleEvent represents a node lifecycle event (start, stop, crash).
+type LifecycleEvent struct {
+	ID             int64   `json:"id"`
+	Timestamp      string  `json:"timestamp"`
+	Event          string  `json:"event"`           // START, STOP, CRASH, SIGNAL, CONNECTION_LOST
+	Reason         string  `json:"reason"`          // Detailed reason
+	UptimeSeconds  float64 `json:"uptime_seconds"`  // How long the node was running
+	RouteAll       bool    `json:"route_all"`       // Was route-all enabled
+	RouteRestored  bool    `json:"route_restored"`  // Were routes restored successfully
+	Version        string  `json:"version"`
+}
+
+// LifecycleParams are parameters for the "lifecycle" method.
+type LifecycleParams struct {
+	Limit int `json:"limit,omitempty"` // Max events to return
+}
+
+// LifecycleResult is returned by the "lifecycle" method.
+type LifecycleResult struct {
+	Events []LifecycleEvent `json:"events"`
+}
+
+// CrashStatsParams are parameters for the "crash_stats" method.
+type CrashStatsParams struct {
+	Since string `json:"since,omitempty"` // Time range: -1h, -24h, -7d
+}
+
+// CrashStatsResult is returned by the "crash_stats" method.
+type CrashStatsResult struct {
+	TotalCrashes        int              `json:"total_crashes"`
+	CrashesWithRouteAll int              `json:"crashes_with_route_all"`
+	RouteRestoreFailures int             `json:"route_restore_failures"`
+	LastCrash           *LifecycleEvent  `json:"last_crash,omitempty"`
+}
+
 // Common error codes.
 const (
 	ErrCodeInvalidMethod = -32601

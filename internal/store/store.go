@@ -151,6 +151,20 @@ func (s *Store) initSchema() error {
 		key TEXT PRIMARY KEY,
 		value TEXT
 	);
+
+	-- Lifecycle events (start, stop, crash)
+	CREATE TABLE IF NOT EXISTS lifecycle (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp INTEGER NOT NULL,
+		event TEXT NOT NULL,      -- START, STOP, CRASH, SIGNAL
+		reason TEXT,              -- Detailed reason or signal name
+		uptime_seconds REAL,      -- How long the node was running
+		route_all INTEGER,        -- Was route-all enabled (1/0)
+		route_restored INTEGER,   -- Were routes restored successfully (1/0)
+		version TEXT
+	);
+	CREATE INDEX IF NOT EXISTS idx_lifecycle_timestamp ON lifecycle(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_lifecycle_event ON lifecycle(event);
 	`
 	_, err := s.db.Exec(schema)
 	return err
@@ -374,6 +388,145 @@ func (s *Store) aggregateMetrics() {
 		WHERE timestamp < ?
 		GROUP BY ts_hour, name, tags
 	`, hourAgo.UnixMilli())
+}
+
+// LifecycleEvent represents a node lifecycle event (start, stop, crash).
+type LifecycleEvent struct {
+	ID             int64     `json:"id"`
+	Timestamp      time.Time `json:"timestamp"`
+	Event          string    `json:"event"`           // START, STOP, CRASH, SIGNAL
+	Reason         string    `json:"reason"`          // Detailed reason or signal name
+	UptimeSeconds  float64   `json:"uptime_seconds"`  // How long the node was running
+	RouteAll       bool      `json:"route_all"`       // Was route-all enabled
+	RouteRestored  bool      `json:"route_restored"`  // Were routes restored successfully
+	Version        string    `json:"version"`
+}
+
+// WriteLifecycleEvent records a lifecycle event.
+func (s *Store) WriteLifecycleEvent(event, reason string, uptimeSeconds float64, routeAll, routeRestored bool, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	routeAllInt := 0
+	if routeAll {
+		routeAllInt = 1
+	}
+	routeRestoredInt := 0
+	if routeRestored {
+		routeRestoredInt = 1
+	}
+
+	_, err := s.db.Exec(
+		"INSERT INTO lifecycle (timestamp, event, reason, uptime_seconds, route_all, route_restored, version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		time.Now().UnixMilli(), event, reason, uptimeSeconds, routeAllInt, routeRestoredInt, version,
+	)
+	return err
+}
+
+// GetLifecycleEvents returns recent lifecycle events.
+func (s *Store) GetLifecycleEvents(limit int) ([]LifecycleEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`
+		SELECT id, timestamp, event, reason, uptime_seconds, route_all, route_restored, version
+		FROM lifecycle
+		ORDER BY timestamp DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []LifecycleEvent
+	for rows.Next() {
+		var e LifecycleEvent
+		var tsMs int64
+		var routeAllInt, routeRestoredInt int
+		var reason, version sql.NullString
+		if err := rows.Scan(&e.ID, &tsMs, &e.Event, &reason, &e.UptimeSeconds, &routeAllInt, &routeRestoredInt, &version); err != nil {
+			return nil, err
+		}
+		e.Timestamp = time.UnixMilli(tsMs)
+		e.Reason = reason.String
+		e.Version = version.String
+		e.RouteAll = routeAllInt == 1
+		e.RouteRestored = routeRestoredInt == 1
+		events = append(events, e)
+	}
+	return events, nil
+}
+
+// GetLastCrash returns the most recent crash event.
+func (s *Store) GetLastCrash() (*LifecycleEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := s.db.QueryRow(`
+		SELECT id, timestamp, event, reason, uptime_seconds, route_all, route_restored, version
+		FROM lifecycle
+		WHERE event IN ('CRASH', 'SIGNAL', 'CONNECTION_LOST')
+		ORDER BY timestamp DESC
+		LIMIT 1
+	`)
+
+	var e LifecycleEvent
+	var tsMs int64
+	var routeAllInt, routeRestoredInt int
+	var reason, version sql.NullString
+	if err := row.Scan(&e.ID, &tsMs, &e.Event, &reason, &e.UptimeSeconds, &routeAllInt, &routeRestoredInt, &version); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No crash found
+		}
+		return nil, err
+	}
+	e.Timestamp = time.UnixMilli(tsMs)
+	e.Reason = reason.String
+	e.Version = version.String
+	e.RouteAll = routeAllInt == 1
+	e.RouteRestored = routeRestoredInt == 1
+	return &e, nil
+}
+
+// GetCrashStats returns crash statistics for a time period.
+func (s *Store) GetCrashStats(since time.Time) (total int, withRouteAll int, routeRestoreFailures int, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sinceMs := since.UnixMilli()
+
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM lifecycle
+		WHERE event IN ('CRASH', 'SIGNAL', 'CONNECTION_LOST')
+		AND timestamp >= ?
+	`, sinceMs).Scan(&total)
+	if err != nil {
+		return
+	}
+
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM lifecycle
+		WHERE event IN ('CRASH', 'SIGNAL', 'CONNECTION_LOST')
+		AND route_all = 1
+		AND timestamp >= ?
+	`, sinceMs).Scan(&withRouteAll)
+	if err != nil {
+		return
+	}
+
+	err = s.db.QueryRow(`
+		SELECT COUNT(*) FROM lifecycle
+		WHERE event IN ('CRASH', 'SIGNAL', 'CONNECTION_LOST')
+		AND route_all = 1
+		AND route_restored = 0
+		AND timestamp >= ?
+	`, sinceMs).Scan(&routeRestoreFailures)
+	return
 }
 
 // GetStorageStats returns storage statistics.
