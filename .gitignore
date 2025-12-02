@@ -1,0 +1,63 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage tool
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# SQLite databases (local data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Local data directory
+.vpn-node/
+
+# Certificates (should be generated per-environment)
+certs/*.crt
+certs/*.key
+certs/*.pem
+!certs/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Secrets (never commit)
+secrets/
+*.secret
+
+# Build artifacts
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
