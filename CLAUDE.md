@@ -239,6 +239,153 @@ There's a working (but bloated) VPN at `/Users/miguel_lemos/Desktop/family-vpn/`
 
 The family-vpn has connectivity issues and all-at-once deployment. This project aims to fix those.
 
+## Local Network SSH Access
+
+All family machines share the same password: `osopanda`
+
+| Machine | Hostname (mDNS) | Username | SSH Command |
+|---------|-----------------|----------|-------------|
+| **Mac Mini** | `miguel-lemoss-Mac-mini.local` | `miguel_lemos` | `sshpass -p 'osopanda' ssh miguel_lemos@miguel-lemoss-Mac-mini.local` |
+| **Anastasia's MacBook** | `MacBook-Air-Anastasiia.local` | `anastasiia` | `sshpass -p 'osopanda' ssh anastasiia@MacBook-Air-Anastasiia.local` |
+| **Miguel's MacBook Air** | `Miguels-MacBook-Air.local` | `miguel_lemos` | Local machine, no SSH needed |
+| **Hetzner Server** | `95.217.238.72` | `root` | `ssh hetzner-vpn` (uses key) |
+
+### Important Notes
+
+1. **Use mDNS hostnames, not IP addresses**
+   - IP addresses can change on Wi-Fi networks
+   - mDNS `.local` hostnames resolve dynamically via Bonjour
+   - Example: Use `miguel-lemoss-Mac-mini.local` instead of `192.168.0.xx`
+
+2. **Discovery with dns-sd**
+   - If unsure of hostname: `dns-sd -B _ssh._tcp local.`
+   - This browses for SSH services on local network
+
+3. **Install sshpass** (for non-interactive SSH with password)
+   ```bash
+   brew install hudochenkov/sshpass/sshpass
+   ```
+
+## Secure Configuration (.env)
+
+The project uses a private GitHub Gist to securely distribute configuration:
+
+### Quick Setup
+
+```bash
+# 1. Authenticate with GitHub CLI
+gh auth login
+
+# 2. Clone the private .env gist
+gh gist clone b523442d7bec467dbba22a21feab027e
+
+# 3. Copy to project root
+cp b523442d7bec467dbba22a21feab027e/.env .
+
+# 4. Clean up
+rm -rf b523442d7bec467dbba22a21feab027e
+```
+
+### Configuration Values
+
+See `.env.example` for all available options:
+
+| Variable | Description |
+|----------|-------------|
+| `VPN_SERVER_HOST` | Server IP (95.217.238.72) |
+| `VPN_SERVER_PORT` | VPN port (443) |
+| `SUDO_PASSWORD` | Local machine sudo password for TUN device |
+| `VPN_ENCRYPTION_KEY` | 32-byte AES-256 key (hex encoded, 64 chars) |
+| `VPN_SSH_USER` | SSH user for deployment |
+| `VPN_SSH_KEY` | Path to SSH private key |
+
+### Update the Gist
+
+```bash
+# Edit .env locally, then push updates
+gh gist edit b523442d7bec467dbba22a21feab027e
+```
+
+**Note**: The `.env` file is excluded from git via `.gitignore`. Never commit secrets.
+
+## Setting Up a New VPN Client
+
+### Quick Setup (Recommended)
+
+```bash
+# 1. SSH to the target machine
+sshpass -p 'osopanda' ssh miguel_lemos@miguel-lemoss-Mac-mini.local
+
+# 2. Clone the repo (if not already done)
+git clone https://github.com/miguelemosreverte/the-family-vpn.git ~/the-family-vpn
+
+# 3. Install Go (if not installed)
+# Download from https://go.dev/dl/ or:
+curl -L -o /tmp/go.pkg "https://go.dev/dl/go1.22.0.darwin-arm64.pkg"
+echo "osopanda" | sudo -S installer -pkg /tmp/go.pkg -target /
+
+# 4. Build binaries
+cd ~/the-family-vpn
+/usr/local/go/bin/go build -o bin/vpn-node ./cmd/vpn-node
+/usr/local/go/bin/go build -o bin/vpn ./cmd/vpn
+
+# 5. IMPORTANT: Sign binaries (macOS code signing requirement)
+codesign --sign - --force --deep bin/vpn-node
+codesign --sign - --force --deep bin/vpn
+
+# 6. Start the VPN client
+echo "osopanda" | sudo -S nohup ./bin/vpn-node --connect 95.217.238.72:443 --name mac-mini > /var/log/vpn-node.log 2>&1 &
+
+# 7. Verify connection
+./bin/vpn status
+ping 10.8.0.1   # Should reach the server
+```
+
+### macOS Code Signing
+
+**CRITICAL**: macOS will SIGKILL unsigned binaries that try to create TUN devices.
+
+If you see exit code 137 or the process dies immediately:
+```bash
+# Check system log for code signing errors
+log show --predicate "eventMessage contains \"CODE SIGNING\"" --last 1m
+
+# Fix by ad-hoc signing
+codesign --sign - --force --deep bin/vpn-node
+```
+
+### Automated Setup Script
+
+Use the provided setup script:
+```bash
+# Local setup
+./scripts/setup-client.sh --name mac-mini
+
+# Remote setup via SSH
+./scripts/setup-client.sh --remote miguel_lemos@miguel-lemoss-Mac-mini.local --name mac-mini
+```
+
+## Current Mesh Network
+
+| Node | VPN IP | Platform | Role |
+|------|--------|----------|------|
+| Hetzner Server | 10.8.0.1 | Linux | Server (well-known entry point) |
+| Mac Mini | 10.8.0.3 | darwin | Client |
+| (Your MacBook) | dynamic | darwin | Client |
+
+## GitHub Repository
+
+- **URL**: https://github.com/miguelemosreverte/the-family-vpn
+- **Main branch**: `main`
+- **CI/CD**: GitHub Actions triggers webhook to server on push
+
+### GitHub Secrets Required
+
+| Secret | Description |
+|--------|-------------|
+| `SERVER_HOST` | Server IP: `95.217.238.72` |
+| `DEPLOY_TOKEN` | Authentication token for deploy webhook |
+
 ## Current Status
 
 - [x] TUN device creation (darwin/linux)
@@ -258,6 +405,8 @@ The family-vpn has connectivity issues and all-at-once deployment. This project 
 - [x] VPN verification command (vpn verify)
 - [x] NAT configured on Helsinki server
 - [x] Web dashboard (vpn ui)
+- [x] GitHub Actions CI/CD with webhook deployment
+- [x] Mac Mini client deployed (10.8.0.3)
 - [ ] Real-time log streaming (--follow)
 - [ ] WebSocket peer discovery
 - [ ] TLS support

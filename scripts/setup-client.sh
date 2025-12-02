@@ -78,6 +78,13 @@ setup_local() {
     go build -o bin/vpn-node ./cmd/vpn-node
     go build -o bin/vpn ./cmd/vpn
 
+    # Sign binaries (macOS code signing requirement)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        log "Signing binaries (macOS code signing)..."
+        codesign --sign - --force --deep bin/vpn-node
+        codesign --sign - --force --deep bin/vpn
+    fi
+
     # Create data directory
     mkdir -p ~/.vpn-node
 
@@ -207,6 +214,12 @@ INSTALL_GO
         cd ~/the-family-vpn
         go build -o bin/vpn-node ./cmd/vpn-node
         go build -o bin/vpn ./cmd/vpn
+        # Sign binaries (macOS code signing requirement)
+        if [[ "\$OSTYPE" == "darwin"* ]]; then
+            echo "Signing binaries..."
+            codesign --sign - --force --deep bin/vpn-node
+            codesign --sign - --force --deep bin/vpn
+        fi
         mkdir -p ~/.vpn-node
 REMOTE_SETUP
 

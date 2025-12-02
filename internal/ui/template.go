@@ -9,6 +9,9 @@ func init() {
     <title>VPN Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <style>
         * {
             margin: 0;
@@ -650,6 +653,120 @@ func init() {
             cursor: not-allowed;
         }
 
+        /* SSH button */
+        .ssh-btn {
+            padding: 6px 12px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-decoration: none;
+        }
+
+        .ssh-btn:hover {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .ssh-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Network peers grid */
+        .peers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .peer-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .peer-card.is-self {
+            border-color: var(--accent);
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(139, 92, 246, 0.1));
+        }
+
+        .peer-card-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .peer-card-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .peer-card-info {
+            flex: 1;
+        }
+
+        .peer-card-name {
+            font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .peer-card-ip {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+
+        .peer-card-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .peer-card-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: auto;
+        }
+
+        .you-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            background: var(--accent);
+            border-radius: 4px;
+            color: white;
+        }
+
+        .os-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            background: var(--bg-card);
+            border-radius: 4px;
+            color: var(--text-secondary);
+        }
+
         /* VPN Toggle Switch */
         .vpn-toggle-container {
             display: flex;
@@ -764,6 +881,173 @@ func init() {
         .sidebar-mini-toggle.on .mini-knob {
             transform: translateX(18px);
         }
+
+        /* Terminal Modal */
+        .terminal-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .terminal-modal.open {
+            display: flex;
+        }
+
+        .terminal-container {
+            width: 90%;
+            max-width: 1000px;
+            height: 80%;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--border);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+
+        .terminal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .terminal-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .terminal-title-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .terminal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s;
+        }
+
+        .terminal-close-btn:hover {
+            background: var(--error);
+            color: white;
+        }
+
+        .terminal-body {
+            flex: 1;
+            padding: 8px;
+            overflow: hidden;
+        }
+
+        .terminal-body .xterm {
+            height: 100%;
+        }
+
+        .terminal-info {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 14px;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .terminal-info-icon {
+            font-size: 48px;
+        }
+
+        .terminal-info-cmd {
+            font-family: monospace;
+            background: var(--bg-card);
+            padding: 12px 20px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .terminal-copy-btn {
+            padding: 6px 12px;
+            background: var(--accent);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .terminal-copy-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        /* Footer */
+        .footer {
+            position: fixed;
+            bottom: 0;
+            left: 240px;
+            right: 0;
+            padding: 8px 24px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+            z-index: 100;
+        }
+
+        .footer-version {
+            font-family: monospace;
+        }
+
+        .footer-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .footer-status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        .footer-status-dot.offline {
+            background: var(--error);
+        }
+
+        /* Adjust main content for footer */
+        .main {
+            margin-left: 240px;
+            flex: 1;
+            padding: 24px;
+            padding-bottom: 60px;
+            min-height: 100vh;
+        }
     </style>
 </head>
 <body>
@@ -838,10 +1122,15 @@ func init() {
                     <div class="stat-value small" id="home-version">-</div>
                 </div>
             </div>
-            <div class="empty-state">
-                <div class="empty-icon">&#127968;</div>
-                <h2>VPN Mesh Dashboard</h2>
-                <p style="margin-top: 8px;">Select a page from the sidebar to explore</p>
+            <!-- Network Peers Section -->
+            <div class="chart-container">
+                <div class="chart-header">
+                    <span class="chart-title">Network Peers</span>
+                    <button class="chart-btn" onclick="loadNetworkPeers()">Refresh</button>
+                </div>
+                <div id="network-peers-container" class="peers-grid">
+                    <div class="loading"><div class="spinner"></div></div>
+                </div>
             </div>
         </div>
 
@@ -980,6 +1269,10 @@ func init() {
                         <option value="store">store</option>
                         <option value="control">control</option>
                     </select>
+                    <select class="filter-select" id="log-peer-filter">
+                        <option value="">All Peers</option>
+                        <!-- Populated dynamically from network peers -->
+                    </select>
                     <div class="time-range">
                         <button class="time-btn active" data-range="-15m">15m</button>
                         <button class="time-btn" data-range="-1h">1h</button>
@@ -1061,6 +1354,22 @@ func init() {
             <button class="action-btn" onclick="loadVerify()">Refresh</button>
         </div>
     </main>
+
+    <!-- Terminal Modal for SSH -->
+    <div id="terminal-modal" class="terminal-modal" onclick="closeTerminalOnBackdrop(event)">
+        <div class="terminal-container">
+            <div class="terminal-header">
+                <div class="terminal-title">
+                    <span class="terminal-title-dot" id="terminal-status-dot"></span>
+                    <span id="terminal-title-text">SSH Terminal</span>
+                </div>
+                <button class="terminal-close-btn" onclick="closeTerminal()">&times;</button>
+            </div>
+            <div class="terminal-body" id="terminal-body">
+                <!-- xterm.js terminal will be mounted here -->
+            </div>
+        </div>
+    </div>
 
     <script>
         // State
@@ -1148,10 +1457,290 @@ func init() {
                 document.getElementById('home-vpn-ip').textContent = status.vpn_address || '-';
                 document.getElementById('home-uptime').textContent = status.uptime_str || '-';
                 document.getElementById('home-version').textContent = 'v' + (status.version || '0.1.0');
+
+                // Also load network peers
+                loadNetworkPeers();
             } catch (err) {
                 console.error('Failed to load home:', err);
             }
         }
+
+        // Load network peers with SSH buttons
+        async function loadNetworkPeers() {
+            const container = document.getElementById('network-peers-container');
+
+            try {
+                const res = await fetch('/api/network_peers');
+                if (!res.ok) throw new Error('Failed to fetch network peers');
+                const data = await res.json();
+
+                const peers = data.peers || [];
+
+                if (peers.length === 0) {
+                    container.innerHTML = '<div class="empty-state"><p>No peers in network</p></div>';
+                    return;
+                }
+
+                // Get current node's VPN address to identify ourselves
+                const statusRes = await fetch('/api/status');
+                const status = await statusRes.json();
+                const myVpnAddr = status.vpn_address;
+
+                container.innerHTML = peers.map(peer => {
+                    const isUs = peer.vpn_address === myVpnAddr;
+                    const osBadge = peer.os ? ` + "`" + `<span class="os-badge">${peer.os}</span>` + "`" + ` : '';
+                    const youBadge = isUs ? '<span class="you-badge">YOU</span>' : '';
+
+                    // SSH command - uses VPN internal IP
+                    // For server (linux), use root@. For clients (darwin), use miguel_lemos (family default)
+                    const sshUser = peer.os === 'linux' ? 'root' : 'miguel_lemos';
+                    const sshTarget = peer.vpn_address;
+                    const sshCmd = ` + "`" + `ssh ${sshUser}@${sshTarget}` + "`" + `;
+
+                    // Disable SSH button for ourselves
+                    const sshBtnClass = isUs ? 'ssh-btn disabled' : 'ssh-btn';
+                    const sshBtnOnClick = isUs ? '' : ` + "`" + `onclick="openSSHTerminal('${peer.name || 'Unknown'}', '${sshCmd}')"` + "`" + `;
+
+                    return ` + "`" + `
+                        <div class="peer-card ${isUs ? 'is-self' : ''}">
+                            <div class="peer-card-header">
+                                <div class="peer-card-avatar">${(peer.name || 'U')[0].toUpperCase()}</div>
+                                <div class="peer-card-info">
+                                    <div class="peer-card-name">
+                                        ${peer.name || 'Unknown'}
+                                        ${youBadge}
+                                        ${osBadge}
+                                    </div>
+                                    <div class="peer-card-ip">${peer.vpn_address || '-'}</div>
+                                </div>
+                            </div>
+                            <div class="peer-card-meta">
+                                <span>Host: ${peer.hostname || '-'}</span>
+                            </div>
+                            <div class="peer-card-actions">
+                                <button class="${sshBtnClass}" ${sshBtnOnClick} title="${isUs ? 'Cannot SSH to yourself' : sshCmd}">
+                                    <span>&#128187;</span> SSH
+                                </button>
+                                <button class="ssh-btn" onclick="pingPeer('${peer.vpn_address}')" title="Ping ${peer.vpn_address}">
+                                    <span>&#128246;</span> Ping
+                                </button>
+                            </div>
+                        </div>
+                    ` + "`" + `;
+                }).join('');
+            } catch (err) {
+                console.error('Failed to load network peers:', err);
+                container.innerHTML = '<div class="empty-state"><p>Failed to load peers</p></div>';
+            }
+        }
+
+        // Copy SSH command to clipboard
+        function copySSHCommand(cmd) {
+            navigator.clipboard.writeText(cmd).then(() => {
+                // Show brief notification
+                const notification = document.createElement('div');
+                notification.textContent = 'SSH command copied! Password: osopanda';
+                notification.style.cssText = ` + "`" + `
+                    position: fixed;
+                    bottom: 20px;
+                    right: 20px;
+                    background: var(--success);
+                    color: white;
+                    padding: 12px 20px;
+                    border-radius: 8px;
+                    font-size: 14px;
+                    z-index: 1000;
+                    animation: fadeIn 0.3s ease;
+                ` + "`" + `;
+                document.body.appendChild(notification);
+                setTimeout(() => notification.remove(), 3000);
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('SSH command: ' + cmd + '\\nPassword: osopanda');
+            });
+        }
+
+        // Ping a peer
+        async function pingPeer(vpnAddr) {
+            alert('Pinging ' + vpnAddr + '...\\n\\nRun in terminal:\\nping ' + vpnAddr);
+        }
+
+        // Terminal state
+        let terminal = null;
+        let fitAddon = null;
+        let terminalWs = null;
+        let currentSSHTarget = null;
+
+        // Open SSH terminal modal with xterm.js
+        function openSSHTerminal(peerName, sshCmd) {
+            // Parse user and host from ssh command (ssh user@host)
+            const match = sshCmd.match(/ssh\s+(\w+)@([\w\.\-]+)/);
+            if (!match) {
+                alert('Invalid SSH command format');
+                return;
+            }
+            const user = match[1];
+            const host = match[2];
+
+            currentSSHTarget = { peerName, user, host };
+
+            document.getElementById('terminal-title-text').textContent = 'SSH to ' + peerName + ' (' + host + ')';
+            document.getElementById('terminal-modal').classList.add('open');
+
+            // Initialize xterm.js
+            initTerminal(user, host);
+        }
+
+        // Initialize xterm.js terminal
+        function initTerminal(user, host) {
+            const container = document.getElementById('terminal-body');
+
+            // Clean up previous terminal
+            if (terminal) {
+                terminal.dispose();
+                terminal = null;
+            }
+            if (terminalWs) {
+                terminalWs.close();
+                terminalWs = null;
+            }
+            container.innerHTML = '';
+
+            // Create new terminal
+            terminal = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'Monaco, Menlo, monospace',
+                theme: {
+                    background: '#0f172a',
+                    foreground: '#f8fafc',
+                    cursor: '#f8fafc',
+                    cursorAccent: '#0f172a',
+                    selection: 'rgba(59, 130, 246, 0.3)',
+                    black: '#1e293b',
+                    red: '#ef4444',
+                    green: '#22c55e',
+                    yellow: '#f59e0b',
+                    blue: '#3b82f6',
+                    magenta: '#8b5cf6',
+                    cyan: '#06b6d4',
+                    white: '#f8fafc',
+                    brightBlack: '#475569',
+                    brightRed: '#f87171',
+                    brightGreen: '#4ade80',
+                    brightYellow: '#fbbf24',
+                    brightBlue: '#60a5fa',
+                    brightMagenta: '#a78bfa',
+                    brightCyan: '#22d3ee',
+                    brightWhite: '#ffffff'
+                }
+            });
+
+            // Create fit addon
+            fitAddon = new FitAddon.FitAddon();
+            terminal.loadAddon(fitAddon);
+
+            // Mount terminal
+            terminal.open(container);
+            fitAddon.fit();
+
+            // Update status dot
+            const statusDot = document.getElementById('terminal-status-dot');
+            statusDot.style.background = 'var(--warning)';
+
+            terminal.writeln('Connecting to ' + user + '@' + host + '...');
+            terminal.writeln('');
+
+            // Connect WebSocket
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = protocol + '//' + window.location.host + '/ws/terminal';
+
+            terminalWs = new WebSocket(wsUrl);
+
+            terminalWs.onopen = () => {
+                // Send connection request
+                terminalWs.send(JSON.stringify({
+                    host: host,
+                    user: user,
+                    password: 'osopanda'
+                }));
+                statusDot.style.background = 'var(--success)';
+
+                // Send terminal size
+                const dims = { cols: terminal.cols, rows: terminal.rows };
+                terminalWs.send(JSON.stringify(dims));
+            };
+
+            terminalWs.onmessage = (event) => {
+                if (event.data instanceof Blob) {
+                    event.data.text().then(text => terminal.write(text));
+                } else {
+                    terminal.write(event.data);
+                }
+            };
+
+            terminalWs.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                terminal.writeln('\\r\\n\\x1b[31mConnection error\\x1b[0m');
+                statusDot.style.background = 'var(--error)';
+            };
+
+            terminalWs.onclose = () => {
+                terminal.writeln('\\r\\n\\x1b[33mConnection closed\\x1b[0m');
+                statusDot.style.background = 'var(--error)';
+            };
+
+            // Handle input
+            terminal.onData(data => {
+                if (terminalWs && terminalWs.readyState === WebSocket.OPEN) {
+                    terminalWs.send(data);
+                }
+            });
+
+            // Handle resize
+            terminal.onResize(({ cols, rows }) => {
+                if (terminalWs && terminalWs.readyState === WebSocket.OPEN) {
+                    terminalWs.send(JSON.stringify({ cols, rows }));
+                }
+            });
+
+            // Fit on window resize
+            window.addEventListener('resize', () => {
+                if (fitAddon && terminal) {
+                    fitAddon.fit();
+                }
+            });
+        }
+
+        // Close terminal modal
+        function closeTerminal() {
+            document.getElementById('terminal-modal').classList.remove('open');
+
+            // Clean up
+            if (terminalWs) {
+                terminalWs.close();
+                terminalWs = null;
+            }
+            if (terminal) {
+                terminal.dispose();
+                terminal = null;
+            }
+            currentSSHTarget = null;
+        }
+
+        // Close on backdrop click
+        function closeTerminalOnBackdrop(event) {
+            if (event.target.id === 'terminal-modal') {
+                closeTerminal();
+            }
+        }
+
+        // Close terminal on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeTerminal();
+            }
+        });
 
         // Load overview
         async function loadOverview() {
@@ -1289,7 +1878,40 @@ func init() {
         // Load observability
         async function loadObservability() {
             loadMetricsCharts();
+            loadPeerFilterOptions();
             loadLogs();
+        }
+
+        // Populate the peer filter dropdown with network peers
+        async function loadPeerFilterOptions() {
+            const select = document.getElementById('log-peer-filter');
+
+            try {
+                const res = await fetch('/api/network_peers');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                const peers = data.peers || [];
+
+                // Keep the "All Peers" (local logs) option
+                select.innerHTML = '<option value="">Local Node</option>';
+
+                // Add an option for each peer - value is the VPN address
+                // This allows us to connect to that peer's control socket
+                peers.forEach(peer => {
+                    const name = peer.name || peer.hostname || 'Unknown';
+                    const vpnAddr = peer.vpn_address || '';
+
+                    if (!vpnAddr) return; // Skip peers without VPN address
+
+                    const option = document.createElement('option');
+                    option.value = vpnAddr; // VPN address for remote connection
+                    option.textContent = ` + "`" + `${name} (${vpnAddr})` + "`" + `;
+                    select.appendChild(option);
+                });
+            } catch (err) {
+                console.error('Failed to load peer filter options:', err);
+            }
         }
 
         // Load metrics charts
@@ -1408,8 +2030,13 @@ func init() {
             const search = document.getElementById('log-search').value;
             const level = document.getElementById('log-level-filter').value;
             const component = document.getElementById('log-component-filter').value;
+            const peerFilter = document.getElementById('log-peer-filter').value;
 
+            // Build the API URL
+            // If peerFilter is set, it contains the VPN address of the remote peer
+            // The backend will connect to that peer's control socket to fetch their logs
             let url = ` + "`" + `/api/logs?earliest=${currentLogRange}` + "`" + `;
+            if (peerFilter) url += ` + "`" + `&peer=${encodeURIComponent(peerFilter)}` + "`" + `;
             if (search) url += ` + "`" + `&search=${encodeURIComponent(search)}` + "`" + `;
             if (level) url += ` + "`" + `&level=${level}` + "`" + `;
             if (component) url += ` + "`" + `&component=${component}` + "`" + `;
@@ -1419,9 +2046,10 @@ func init() {
                 const data = await res.json();
 
                 const container = document.getElementById('logs-list');
+                const entries = data.entries || [];
 
-                if (data.entries && data.entries.length > 0) {
-                    container.innerHTML = data.entries.map(e => ` + "`" + `
+                if (entries.length > 0) {
+                    container.innerHTML = entries.map(e => ` + "`" + `
                         <div class="log-entry">
                             <span class="log-time">${e.timestamp?.substring(0, 19) || ''}</span>
                             <span class="log-level ${e.level}">${e.level}</span>
@@ -1430,7 +2058,8 @@ func init() {
                         </div>
                     ` + "`" + `).join('');
                 } else {
-                    container.innerHTML = '<div class="empty-state"><p>No logs found</p></div>';
+                    const peerMsg = peerFilter ? ' from remote peer (may be unreachable)' : '';
+                    container.innerHTML = ` + "`" + `<div class="empty-state"><p>No logs found${peerMsg}</p></div>` + "`" + `;
                 }
             } catch (err) {
                 console.error('Failed to load logs:', err);
@@ -1484,26 +2113,34 @@ func init() {
             }
         }
 
-        // Render vis.js network graph
+        // Render vis.js network graph - Hub-and-Spoke topology
+        // Helsinki (10.8.0.1) is the hub, all other nodes connect through it
+        const HELSINKI_VPN_IP = '10.8.0.1';
+
         function renderNetworkGraph(data) {
             const container = document.getElementById('network-graph');
+            const nodes = data.nodes || [];
+
+            // Find Helsinki (the hub)
+            const helsinkiNode = nodes.find(n => n.vpn_address === HELSINKI_VPN_IP);
 
             // Create nodes for vis.js
-            const visNodes = (data.nodes || []).map(n => {
+            const visNodes = nodes.map(n => {
                 let color = '#3b82f6'; // Default blue
                 let shape = 'dot';
                 let size = 20;
 
-                if (n.is_us) {
+                // Helsinki is the central hub
+                if (n.vpn_address === HELSINKI_VPN_IP) {
+                    color = '#22c55e'; // Green for the hub
+                    shape = 'diamond';
+                    size = 35;
+                } else if (n.is_us) {
                     color = '#8b5cf6'; // Purple for ourselves
                     shape = 'star';
                     size = 30;
-                } else if (n.distance === 1) {
-                    color = '#22c55e'; // Green for direct connections
-                } else if (n.distance === 2) {
-                    color = '#f59e0b'; // Orange for 2-hop
-                } else if (n.distance > 2) {
-                    color = '#ef4444'; // Red for far nodes
+                } else {
+                    color = '#3b82f6'; // Blue for other peers
                 }
 
                 return {
@@ -1521,15 +2158,25 @@ func init() {
                 };
             });
 
-            // Create edges for vis.js
-            const visEdges = (data.edges || []).map(e => ({
-                from: e.from,
-                to: e.to,
-                color: { color: e.direct ? '#22c55e' : '#475569', opacity: 0.8 },
-                width: e.direct ? 2 : 1,
-                dashes: !e.direct,
-                title: ` + "`" + `Latency: ${e.latency_ms ? e.latency_ms.toFixed(1) + 'ms' : 'N/A'}\\nBandwidth: ${e.bandwidth_bps ? formatBytes(e.bandwidth_bps) + '/s' : 'N/A'}` + "`" + `
-            }));
+            // Create edges for vis.js - Hub-and-Spoke topology
+            // Every node connects ONLY to Helsinki (the hub)
+            // No direct edges between client nodes
+            const visEdges = [];
+            if (helsinkiNode) {
+                nodes.forEach(n => {
+                    // Skip Helsinki itself
+                    if (n.vpn_address === HELSINKI_VPN_IP) return;
+
+                    visEdges.push({
+                        from: n.vpn_address || n.name,
+                        to: HELSINKI_VPN_IP,
+                        color: { color: '#22c55e', opacity: 0.8 },
+                        width: 2,
+                        dashes: false,
+                        title: ` + "`" + `Connection to Helsinki hub\\nLatency: ${n.latency_ms ? n.latency_ms.toFixed(1) + 'ms' : 'N/A'}` + "`" + `
+                    });
+                });
+            }
 
             // vis.js options
             const options = {
@@ -1720,6 +2367,7 @@ func init() {
         document.getElementById('log-search').addEventListener('input', debounce(loadLogs, 300));
         document.getElementById('log-level-filter').addEventListener('change', loadLogs);
         document.getElementById('log-component-filter').addEventListener('change', loadLogs);
+        document.getElementById('log-peer-filter').addEventListener('change', loadLogs);
 
         // Debounce helper
         function debounce(fn, delay) {
@@ -1822,7 +2470,34 @@ func init() {
 
         // Also refresh connection status periodically
         setInterval(loadConnectionStatus, 10000);
+
+        // Update footer with version from status
+        async function updateFooterVersion() {
+            try {
+                const resp = await fetch('/api/status');
+                const data = await resp.json();
+                document.getElementById('footer-version').textContent = 'v' + (data.version || '0.0.0');
+                document.getElementById('footer-node').textContent = data.node_name || 'Unknown';
+                document.getElementById('footer-status-dot').className = 'footer-status-dot';
+            } catch (e) {
+                document.getElementById('footer-version').textContent = 'v?.?.?';
+                document.getElementById('footer-status-dot').className = 'footer-status-dot offline';
+            }
+        }
+        updateFooterVersion();
+        setInterval(updateFooterVersion, 30000);
     </script>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-version">
+            VPN Mesh Network <span id="footer-version">v0.0.0</span>
+        </div>
+        <div class="footer-status">
+            <span id="footer-status-dot" class="footer-status-dot"></span>
+            <span>Node: <span id="footer-node">...</span></span>
+        </div>
+    </footer>
 </body>
 </html>`
 }

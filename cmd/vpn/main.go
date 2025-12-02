@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -58,6 +59,9 @@ Use --node to connect to a remote node.`,
 	rootCmd.AddCommand(connectCmd())
 	rootCmd.AddCommand(disconnectCmd())
 	rootCmd.AddCommand(connectionStatusCmd())
+	rootCmd.AddCommand(sshCmd())
+	rootCmd.AddCommand(networkPeersCmd())
+	rootCmd.AddCommand(versionCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -707,4 +711,313 @@ func connectionStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func sshCmd() *cobra.Command {
+	var user, password string
+	var execSSH bool
+
+	cmd := &cobra.Command{
+		Use:   "ssh [peer]",
+		Short: "SSH to a peer via VPN",
+		Long: `SSH to a peer in the VPN network.
+
+The peer can be specified by:
+  - Name (e.g., "mac-mini", "server")
+  - VPN IP address (e.g., "10.8.0.1")
+
+If no peer is specified, shows an interactive menu to select a peer.
+
+The command will look up the peer's VPN address and construct the SSH command.
+Use --exec to actually run SSH (requires sshpass to be installed).
+
+Family password: osopanda
+
+Examples:
+  vpn ssh                         # Interactive peer selection
+  vpn ssh mac-mini                # Show SSH command for mac-mini
+  vpn ssh mac-mini --exec         # Actually SSH to mac-mini
+  vpn ssh 10.8.0.1                # SSH to VPN IP directly
+  vpn ssh server --user=root      # SSH as root to server`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Try to connect to node for peer lookup
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				return fmt.Errorf("cannot connect to local node: %w", err)
+			}
+			defer client.Close()
+
+			// Get network peers
+			result, err := client.NetworkPeers()
+			if err != nil {
+				return fmt.Errorf("cannot get network peers: %w", err)
+			}
+
+			// Get our own status to filter ourselves out
+			status, _ := client.Status()
+			myVPNAddr := ""
+			if status != nil {
+				myVPNAddr = status.VPNAddress
+			}
+
+			// Filter out ourselves from the peer list
+			var availablePeers []protocol.PeerListEntry
+			for _, p := range result.Peers {
+				if p.VPNAddress != myVPNAddr {
+					availablePeers = append(availablePeers, p)
+				}
+			}
+
+			if len(availablePeers) == 0 {
+				fmt.Println("No other peers available in the network.")
+				return nil
+			}
+
+			var target string
+			if len(args) == 0 {
+				// Interactive peer selection
+				fmt.Println("\n" + colorGreen + "Select a peer to SSH into:" + colorReset)
+				fmt.Println("────────────────────────────────────────")
+				for i, p := range availablePeers {
+					osInfo := ""
+					if p.OS != "" {
+						osInfo = fmt.Sprintf(" [%s]", p.OS)
+					}
+					fmt.Printf("  %d) %s (%s)%s\n", i+1, p.Name, p.VPNAddress, osInfo)
+				}
+				fmt.Println()
+				fmt.Print("Enter number (or 'q' to quit): ")
+
+				var input string
+				fmt.Scanln(&input)
+				if input == "q" || input == "" {
+					return nil
+				}
+
+				var choice int
+				if _, err := fmt.Sscanf(input, "%d", &choice); err != nil || choice < 1 || choice > len(availablePeers) {
+					fmt.Println("Invalid selection")
+					return nil
+				}
+
+				target = availablePeers[choice-1].Name
+			} else {
+				target = args[0]
+			}
+
+			// Find the peer
+			var targetIP string
+			var targetUser string
+			var peerName string
+
+			// Check if target is already a VPN IP
+			if strings.HasPrefix(target, "10.8.0.") {
+				targetIP = target
+				// Try to find user from peer list
+				for _, p := range availablePeers {
+					if p.VPNAddress == target {
+						peerName = p.Name
+						if p.OS == "linux" {
+							targetUser = "root"
+						} else {
+							targetUser = p.Hostname
+						}
+						break
+					}
+				}
+				if targetUser == "" {
+					targetUser = user
+				}
+			} else {
+				// Search by name
+				for _, p := range availablePeers {
+					if strings.EqualFold(p.Name, target) || strings.Contains(strings.ToLower(p.Name), strings.ToLower(target)) {
+						targetIP = p.VPNAddress
+						peerName = p.Name
+						if p.OS == "linux" {
+							targetUser = "root"
+						} else if p.Hostname != "" {
+							targetUser = p.Hostname
+						} else {
+							targetUser = p.Name
+						}
+						break
+					}
+				}
+			}
+
+			if targetIP == "" {
+				fmt.Printf("%sPeer not found: %s%s\n", colorRed, target, colorReset)
+				fmt.Println("\nAvailable peers:")
+				for _, p := range availablePeers {
+					fmt.Printf("  - %s (%s)\n", p.Name, p.VPNAddress)
+				}
+				return nil
+			}
+
+			// Override user if specified
+			if user != "" {
+				targetUser = user
+			}
+			if targetUser == "" {
+				targetUser = "root" // fallback
+			}
+
+			// Override password if not specified
+			if password == "" {
+				password = "osopanda"
+			}
+
+			sshCmdStr := fmt.Sprintf("ssh %s@%s", targetUser, targetIP)
+
+			if execSSH {
+				// Actually execute SSH using sshpass
+				fmt.Printf("\n%sConnecting to %s...%s\n\n", colorGreen, peerName, colorReset)
+
+				// Check if sshpass is available
+				if _, err := exec.LookPath("sshpass"); err != nil {
+					fmt.Println("sshpass not found. Install it with: brew install hudochenkov/sshpass/sshpass")
+					fmt.Println("\nAlternatively, run SSH manually:")
+					fmt.Printf("  %s\n", sshCmdStr)
+					fmt.Printf("  Password: %s\n", password)
+					return nil
+				}
+
+				// Run sshpass with SSH
+				sshCmd := exec.Command("sshpass", "-p", password, "ssh",
+					"-o", "StrictHostKeyChecking=no",
+					"-o", "UserKnownHostsFile=/dev/null",
+					fmt.Sprintf("%s@%s", targetUser, targetIP))
+				sshCmd.Stdin = os.Stdin
+				sshCmd.Stdout = os.Stdout
+				sshCmd.Stderr = os.Stderr
+
+				return sshCmd.Run()
+			}
+
+			// Just show the command
+			fmt.Printf("\n%sSSH to %s%s\n", colorGreen, peerName, colorReset)
+			fmt.Println("────────────────────────────────────────")
+			fmt.Printf("  Peer:      %s\n", peerName)
+			fmt.Printf("  VPN IP:    %s\n", targetIP)
+			fmt.Printf("  User:      %s\n", targetUser)
+			fmt.Printf("  Password:  %s\n", password)
+			fmt.Println()
+			fmt.Printf("  Command:   %s%s%s\n", colorBlue, sshCmdStr, colorReset)
+			fmt.Println()
+			fmt.Println("To connect directly, use --exec flag:")
+			fmt.Printf("  vpn ssh %s --exec\n", target)
+			fmt.Println()
+			fmt.Println("Or copy the command above, or use sshpass:")
+			fmt.Printf("  sshpass -p '%s' %s\n", password, sshCmdStr)
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&user, "user", "", "SSH username (auto-detected if not specified)")
+	cmd.Flags().StringVar(&password, "password", "osopanda", "SSH password (default: osopanda)")
+	cmd.Flags().BoolVar(&execSSH, "exec", false, "Actually execute SSH (requires sshpass)")
+
+	return cmd
+}
+
+const cliVersion = "0.2.0"
+
+func versionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Show CLI and node version",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Printf("VPN CLI version %s\n", cliVersion)
+
+			// Try to get node version
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				fmt.Printf("Node version: (not connected)\n")
+				return nil
+			}
+			defer client.Close()
+
+			status, err := client.Status()
+			if err != nil {
+				fmt.Printf("Node version: (error: %v)\n", err)
+				return nil
+			}
+
+			fmt.Printf("Node version: %s (%s)\n", status.Version, status.NodeName)
+			return nil
+		},
+	}
+}
+
+func networkPeersCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:     "network-peers",
+		Aliases: []string{"np", "net-peers"},
+		Short:   "List all peers in the VPN network",
+		Long: `List all peers known to the VPN network.
+
+In client mode, shows peers received from the server via PEER_LIST messages.
+In server mode, shows all connected clients.
+
+Examples:
+  vpn network-peers              # List all network peers
+  vpn network-peers --json       # JSON output for scripting`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			result, err := client.NetworkPeers()
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				output, err := json.MarshalIndent(result, "", "  ")
+				if err != nil {
+					return err
+				}
+				fmt.Println(string(output))
+				return nil
+			}
+
+			mode := "Client"
+			if result.ServerMode {
+				mode = "Server"
+			}
+
+			fmt.Printf("\nNetwork Peers (%s mode)\n", mode)
+			fmt.Println("────────────────────────────────────────────────────────────")
+
+			if len(result.Peers) == 0 {
+				fmt.Println("No peers in network.")
+				fmt.Println("\nNote: Peers are discovered when the server broadcasts the peer list.")
+				return nil
+			}
+
+			fmt.Printf("%-20s %-15s %-25s %s\n", "NAME", "VPN IP", "HOSTNAME", "OS")
+			fmt.Println("────────────────────────────────────────────────────────────")
+
+			for _, p := range result.Peers {
+				fmt.Printf("%-20s %-15s %-25s %s\n",
+					p.Name, p.VPNAddress, p.Hostname, p.OS)
+			}
+
+			fmt.Println()
+			fmt.Println("Use 'vpn ssh <name>' to connect to a peer.")
+
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+
+	return cmd
 }

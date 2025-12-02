@@ -46,10 +46,16 @@ func main() {
 	// Encryption flag
 	encryption := flag.Bool("encrypt", true, "Enable packet encryption (AES-256-GCM)")
 
-	// Routing flag
-	routeAll := flag.Bool("route-all", false, "Route all traffic through VPN (client mode)")
+	// Routing flags - route-all defaults to true for VPN clients
+	routeAll := flag.Bool("route-all", true, "Route all traffic through VPN (client mode, enabled by default)")
+	noRouteAll := flag.Bool("no-route-all", false, "Disable routing all traffic through VPN (direct mode)")
 
 	flag.Parse()
+
+	// If --no-route-all is explicitly set, override route-all
+	if *noRouteAll {
+		*routeAll = false
+	}
 
 	// Validate mode
 	if !*serverMode && *connectTo == "" {

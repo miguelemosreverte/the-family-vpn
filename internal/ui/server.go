@@ -46,6 +46,10 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/verify", s.handleVerify)
 	mux.HandleFunc("/api/connection", s.handleConnection)
 	mux.HandleFunc("/api/topology", s.handleTopology)
+	mux.HandleFunc("/api/network_peers", s.handleNetworkPeers)
+
+	// WebSocket terminal
+	mux.HandleFunc("/ws/terminal", s.handleTerminal)
 
 	// Static files and SPA
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -149,10 +153,34 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	client, err := s.getClient()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
+	// Check if we're querying a specific peer's logs
+	peerAddr := r.URL.Query().Get("peer")
+
+	var client *cli.Client
+	var err error
+
+	if peerAddr != "" {
+		// Connect to the remote peer's control socket via VPN
+		// Peers listen on port 9001 by default
+		remoteAddr := peerAddr + ":9001"
+		client, err = cli.NewClient(remoteAddr)
+		if err != nil {
+			// If we can't connect to the remote peer, return an error with helpful message
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(protocol.LogsResult{
+				Entries:    []protocol.LogEntry{},
+				TotalCount: 0,
+				HasMore:    false,
+			})
+			return
+		}
+	} else {
+		// Query local node
+		client, err = s.getClient()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 	}
 	defer client.Close()
 
@@ -274,6 +302,24 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(topology)
+}
+
+func (s *Server) handleNetworkPeers(w http.ResponseWriter, r *http.Request) {
+	client, err := s.getClient()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer client.Close()
+
+	peers, err := client.NetworkPeers()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(peers)
 }
 
 // Placeholder for compile - will be replaced with actual HTML

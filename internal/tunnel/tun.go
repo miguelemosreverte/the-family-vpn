@@ -7,6 +7,7 @@ import (
 	"net"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/songgao/water"
 )
@@ -25,11 +26,13 @@ const (
 
 // TUN represents a TUN device for VPN traffic.
 type TUN struct {
-	iface      *water.Interface
-	name       string
-	localIP    string
-	gatewayIP  string
-	originalGW string // Original default gateway before VPN
+	iface          *water.Interface
+	name           string
+	localIP        string
+	gatewayIP      string
+	originalGW     string // Original default gateway before VPN
+	serverPublicIP string // Server's public IP (for route cleanup)
+	ipv6WasEnabled bool   // Track if IPv6 was enabled before VPN connected
 }
 
 // Config holds TUN device configuration.
@@ -208,6 +211,9 @@ func (t *TUN) RouteAllTraffic(serverPublicIP string) error {
 }
 
 func (t *TUN) routeAllTrafficDarwin(serverPublicIP string) error {
+	// Save server IP for cleanup later
+	t.serverPublicIP = serverPublicIP
+
 	// Route VPN server through original gateway (prevent routing loop)
 	cmd := exec.Command("route", "-n", "add", "-host", serverPublicIP, t.originalGW)
 	if err := cmd.Run(); err != nil {
@@ -226,11 +232,42 @@ func (t *TUN) routeAllTrafficDarwin(serverPublicIP string) error {
 		return fmt.Errorf("failed to add VPN route: %v", err)
 	}
 
+	// Configure DNS to use fast public resolvers through VPN
+	// This prevents DNS leaks and improves privacy
+	cmd = exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "1.1.1.1", "8.8.8.8")
+	if err := cmd.Run(); err != nil {
+		log.Printf("[tun] Warning: failed to set DNS servers: %v (DNS may leak)", err)
+	} else {
+		log.Printf("[tun] DNS configured: 1.1.1.1 (Cloudflare), 8.8.8.8 (Google) through VPN")
+	}
+
+	// Prevent IPv6 leaks by disabling IPv6 on Wi-Fi
+	// First, check if IPv6 is currently enabled
+	cmd = exec.Command("networksetup", "-getinfo", "Wi-Fi")
+	output, err := cmd.Output()
+	if err == nil {
+		outputStr := string(output)
+		// Check if IPv6 is set to "Automatic" or "Manual" (enabled states)
+		t.ipv6WasEnabled = strings.Contains(outputStr, "IPv6: Automatic") ||
+			strings.Contains(outputStr, "IPv6: Manual")
+	}
+
+	// Disable IPv6 to prevent leaks
+	cmd = exec.Command("networksetup", "-setv6off", "Wi-Fi")
+	if err := cmd.Run(); err != nil {
+		log.Printf("[tun] Warning: failed to disable IPv6: %v (IPv6 may leak)", err)
+	} else {
+		log.Printf("[tun] IPv6 disabled to prevent location leaks")
+	}
+
 	log.Printf("[tun] All traffic now routed through VPN")
 	return nil
 }
 
 func (t *TUN) routeAllTrafficLinux(serverPublicIP string) error {
+	// Save server IP for cleanup later
+	t.serverPublicIP = serverPublicIP
+
 	// Route VPN server through original gateway
 	cmd := exec.Command("ip", "route", "add", serverPublicIP, "via", t.originalGW)
 	if err := cmd.Run(); err != nil {
@@ -260,12 +297,42 @@ func (t *TUN) RestoreRouting() error {
 	}
 
 	if runtime.GOOS == "darwin" {
+		// Delete the server-specific route that was added to prevent routing loops
+		if t.serverPublicIP != "" {
+			exec.Command("route", "-n", "delete", "-host", t.serverPublicIP).Run()
+			log.Printf("[tun] Deleted server route: %s", t.serverPublicIP)
+		}
+
 		exec.Command("route", "-n", "delete", "default").Run()
 		cmd := exec.Command("route", "-n", "add", "-net", "default", t.originalGW)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to restore default route: %v", err)
 		}
+
+		// Restore DNS to DHCP (automatic)
+		cmd = exec.Command("networksetup", "-setdnsservers", "Wi-Fi", "Empty")
+		if err := cmd.Run(); err != nil {
+			log.Printf("[tun] Warning: failed to restore DNS: %v", err)
+		} else {
+			log.Printf("[tun] DNS restored to automatic (DHCP)")
+		}
+
+		// Restore IPv6 if it was enabled before VPN connected
+		if t.ipv6WasEnabled {
+			cmd = exec.Command("networksetup", "-setv6automatic", "Wi-Fi")
+			if err := cmd.Run(); err != nil {
+				log.Printf("[tun] Warning: failed to restore IPv6: %v", err)
+			} else {
+				log.Printf("[tun] IPv6 restored to automatic")
+			}
+		}
 	} else {
+		// Delete the server-specific route that was added to prevent routing loops
+		if t.serverPublicIP != "" {
+			exec.Command("ip", "route", "del", t.serverPublicIP).Run()
+			log.Printf("[tun] Deleted server route: %s", t.serverPublicIP)
+		}
+
 		exec.Command("ip", "route", "del", "default", "dev", t.name).Run()
 		cmd := exec.Command("ip", "route", "add", "default", "via", t.originalGW)
 		if err := cmd.Run(); err != nil {

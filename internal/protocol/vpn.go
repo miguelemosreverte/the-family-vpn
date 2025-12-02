@@ -146,3 +146,37 @@ const (
 	// Update signal: "UPDATE_AVAILABLE"
 	CmdUpdateAvailable = "UPDATE_AVAILABLE"
 )
+
+// PeerListEntry is a peer in the PEER_LIST message.
+type PeerListEntry struct {
+	Name       string `json:"name"`
+	VPNAddress string `json:"vpn_address"`
+	Hostname   string `json:"hostname"`
+	OS         string `json:"os"`
+}
+
+// MakePeerListMessage creates a PEER_LIST control message.
+func MakePeerListMessage(peers []PeerListEntry) []byte {
+	data, _ := json.Marshal(peers)
+	return MakeControlMessage(CmdPeerList + string(data))
+}
+
+// ParsePeerListMessage extracts peers from a PEER_LIST control message.
+func ParsePeerListMessage(data []byte) ([]PeerListEntry, error) {
+	cmd := ExtractControlCommand(data)
+	if !IsPeerListMessage(cmd) {
+		return nil, fmt.Errorf("not a peer list message")
+	}
+
+	jsonData := cmd[len(CmdPeerList):]
+	var peers []PeerListEntry
+	if err := json.Unmarshal([]byte(jsonData), &peers); err != nil {
+		return nil, fmt.Errorf("failed to parse peer list: %w", err)
+	}
+	return peers, nil
+}
+
+// IsPeerListMessage checks if a command is a PEER_LIST message.
+func IsPeerListMessage(cmd string) bool {
+	return len(cmd) >= len(CmdPeerList) && cmd[:len(CmdPeerList)] == CmdPeerList
+}

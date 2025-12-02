@@ -77,6 +77,10 @@ type Daemon struct {
 	bytesOut uint64
 	peers    map[string]*Peer
 
+	// Network peers (client mode - received from server via PEER_LIST)
+	networkPeers   []protocol.PeerListEntry
+	networkPeersMu sync.RWMutex
+
 	// IP assignment (server mode)
 	nextIP       int               // Next IP to assign (starts at 2 for 10.8.0.2)
 	hostnameToIP map[string]string // Persistent IP assignment
@@ -367,6 +371,9 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 	log.Printf("[vpn] Client registered: %s (%s) -> %s (encryption: %v)",
 		peerInfo.Hostname, peerInfo.OS, vpnIP, encryption)
 
+	// Broadcast updated peer list to all clients
+	d.broadcastPeerList()
+
 	// Handle packets from this client
 	d.handleClientPackets(conn, vpnIP)
 
@@ -378,6 +385,9 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 	d.peerConnsMu.Lock()
 	delete(d.peerConns, vpnIP)
 	d.peerConnsMu.Unlock()
+
+	// Broadcast updated peer list after disconnect
+	d.broadcastPeerList()
 
 	log.Printf("[vpn] Client disconnected: %s (%s)", peerInfo.Hostname, vpnIP)
 }
@@ -524,12 +534,21 @@ func (d *Daemon) forwardServerToTUN() {
 		// Check for control messages
 		if protocol.IsControlMessage(packet) {
 			cmd := protocol.ExtractControlCommand(packet)
-			log.Printf("[vpn] Control message: %s", cmd)
 
 			// Handle UPDATE_AVAILABLE from server
 			if cmd == protocol.CmdUpdateAvailable {
+				log.Printf("[vpn] Control message: UPDATE_AVAILABLE")
 				d.HandleUpdateMessage()
+				continue
 			}
+
+			// Handle PEER_LIST from server
+			if protocol.IsPeerListMessage(cmd) {
+				d.handlePeerListMessage(packet)
+				continue
+			}
+
+			log.Printf("[vpn] Control message: %s", cmd)
 			continue
 		}
 
@@ -746,6 +765,97 @@ func (d *Daemon) GetPeers() []Peer {
 	for _, p := range d.peers {
 		peers = append(peers, *p)
 	}
+	return peers
+}
+
+// broadcastPeerList sends the current peer list to all connected clients.
+func (d *Daemon) broadcastPeerList() {
+	if !d.config.ServerMode {
+		return // Only server broadcasts peer lists
+	}
+
+	// Build peer list (include server itself)
+	d.mu.RLock()
+	peers := make([]protocol.PeerListEntry, 0, len(d.peers)+1)
+
+	// Add server as the first peer
+	hostname, _ := os.Hostname()
+	peers = append(peers, protocol.PeerListEntry{
+		Name:       d.config.NodeName,
+		VPNAddress: d.config.VPNAddress,
+		Hostname:   hostname,
+		OS:         "linux",
+	})
+
+	// Add all connected clients
+	for _, p := range d.peers {
+		peers = append(peers, protocol.PeerListEntry{
+			Name:       p.Name,
+			VPNAddress: p.VPNAddress,
+			Hostname:   p.Name,
+			OS:         p.OS,
+		})
+	}
+	d.mu.RUnlock()
+
+	// Create the message
+	msg := protocol.MakePeerListMessage(peers)
+
+	// Send to all peers
+	d.peerConnsMu.RLock()
+	defer d.peerConnsMu.RUnlock()
+
+	log.Printf("[vpn] Broadcasting peer list (%d peers) to %d clients", len(peers), len(d.peerConns))
+
+	for vpnIP, conn := range d.peerConns {
+		if err := conn.WritePacket(msg); err != nil {
+			log.Printf("[vpn] Failed to send peer list to %s: %v", vpnIP, err)
+		}
+	}
+}
+
+// handlePeerListMessage processes a PEER_LIST control message (client mode).
+func (d *Daemon) handlePeerListMessage(packet []byte) {
+	peers, err := protocol.ParsePeerListMessage(packet)
+	if err != nil {
+		log.Printf("[vpn] Failed to parse peer list: %v", err)
+		return
+	}
+
+	d.networkPeersMu.Lock()
+	d.networkPeers = peers
+	d.networkPeersMu.Unlock()
+
+	log.Printf("[vpn] Received peer list with %d peers:", len(peers))
+	for _, p := range peers {
+		log.Printf("[vpn]   - %s (%s) @ %s", p.Name, p.OS, p.VPNAddress)
+	}
+
+	// Update topology with received peers
+	if d.topology != nil {
+		for _, p := range peers {
+			// Skip ourselves
+			if p.VPNAddress == d.config.VPNAddress {
+				continue
+			}
+			d.topology.AddDirectPeer(&NetworkNode{
+				Name:       p.Name,
+				VPNAddress: p.VPNAddress,
+				OS:         p.OS,
+				IsDirect:   p.VPNAddress == "10.8.0.1", // Only server is direct
+			})
+		}
+	}
+}
+
+// GetNetworkPeers returns the list of network peers (client mode).
+func (d *Daemon) GetNetworkPeers() []protocol.PeerListEntry {
+	d.networkPeersMu.RLock()
+	defer d.networkPeersMu.RUnlock()
+
+	// Return a copy
+	peers := make([]protocol.PeerListEntry, len(d.networkPeers))
+	copy(peers, d.networkPeers)
 	return peers
 }
 

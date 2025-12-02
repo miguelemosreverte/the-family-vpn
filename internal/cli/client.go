@@ -259,3 +259,22 @@ func (c *Client) Topology() (*protocol.TopologyResult, error) {
 
 	return &result, nil
 }
+
+// NetworkPeers retrieves the list of network peers (from PEER_LIST).
+func (c *Client) NetworkPeers() (*protocol.NetworkPeersResult, error) {
+	resp, err := c.call("network_peers", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("server error: %s", resp.Error.Message)
+	}
+
+	var result protocol.NetworkPeersResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}

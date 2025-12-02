@@ -179,6 +179,12 @@ type ConnectionResult struct {
 	Status  *ConnectionStatus `json:"status,omitempty"`
 }
 
+// NetworkPeersResult is returned by the "network_peers" method.
+type NetworkPeersResult struct {
+	Peers      []PeerListEntry `json:"peers"`
+	ServerMode bool            `json:"server_mode"`
+}
+
 // Common error codes.
 const (
 	ErrCodeInvalidMethod = -32601

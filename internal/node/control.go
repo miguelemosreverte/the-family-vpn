@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"time"
 
 	"github.com/miguelemosreverte/vpn/internal/protocol"
 	"github.com/miguelemosreverte/vpn/internal/store"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // handleControlConnection processes commands from a CLI client.
 func (d *Daemon) handleControlConnection(conn net.Conn) {
@@ -59,6 +60,8 @@ func (d *Daemon) handleRequest(enc *json.Encoder, req *protocol.Request) {
 		d.handleConnectionStatus(enc, req)
 	case "topology":
 		d.handleTopology(enc, req)
+	case "network_peers":
+		d.handleNetworkPeers(enc, req)
 	default:
 		d.sendError(enc, req.ID, protocol.ErrCodeInvalidMethod,
 			fmt.Sprintf("unknown method: %s", req.Method))
@@ -445,5 +448,45 @@ func (d *Daemon) handleTopology(enc *json.Encoder, req *protocol.Request) {
 	d.sendResult(enc, req.ID, protocol.TopologyResult{
 		Nodes: protoNodes,
 		Edges: protoEdges,
+	})
+}
+
+// handleNetworkPeers returns the list of network peers (for client mode).
+// Server mode returns connected peers, client mode returns peers from PEER_LIST.
+func (d *Daemon) handleNetworkPeers(enc *json.Encoder, req *protocol.Request) {
+	var peers []protocol.PeerListEntry
+
+	if d.config.ServerMode {
+		// Server mode: return connected peers
+		d.mu.RLock()
+		hostname, _ := os.Hostname()
+		peers = make([]protocol.PeerListEntry, 0, len(d.peers)+1)
+
+		// Add server itself first
+		peers = append(peers, protocol.PeerListEntry{
+			Name:       d.config.NodeName,
+			VPNAddress: d.config.VPNAddress,
+			Hostname:   hostname,
+			OS:         "linux",
+		})
+
+		// Add connected peers
+		for _, p := range d.peers {
+			peers = append(peers, protocol.PeerListEntry{
+				Name:       p.Name,
+				VPNAddress: p.VPNAddress,
+				Hostname:   p.Name,
+				OS:         p.OS,
+			})
+		}
+		d.mu.RUnlock()
+	} else {
+		// Client mode: return peers from PEER_LIST
+		peers = d.GetNetworkPeers()
+	}
+
+	d.sendResult(enc, req.ID, protocol.NetworkPeersResult{
+		Peers:      peers,
+		ServerMode: d.config.ServerMode,
 	})
 }
