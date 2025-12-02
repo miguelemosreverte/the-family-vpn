@@ -13,7 +13,7 @@ import (
 	"github.com/miguelemosreverte/vpn/internal/store"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 // handleControlConnection processes commands from a CLI client.
 func (d *Daemon) handleControlConnection(conn net.Conn) {

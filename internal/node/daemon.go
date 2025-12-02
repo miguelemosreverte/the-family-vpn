@@ -97,6 +97,10 @@ type Daemon struct {
 	// Network topology
 	topology *NetworkTopology
 
+	// Connection failure detection (client mode)
+	connFailed     chan struct{} // Signals that VPN connection has failed
+	connFailedOnce sync.Once     // Ensures we only signal failure once
+
 	// Shutdown
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -227,6 +231,9 @@ func (d *Daemon) startServer() error {
 
 // startClient initializes client mode.
 func (d *Daemon) startClient() error {
+	// Initialize connection failure channel
+	d.connFailed = make(chan struct{})
+
 	// Connect to server
 	dialCfg := tunnel.DialConfig{
 		Address:    d.config.ConnectTo,
@@ -309,6 +316,9 @@ func (d *Daemon) startClient() error {
 	// Start packet forwarding
 	go d.forwardTUNToServer()
 	go d.forwardServerToTUN()
+
+	// Start connection failure monitor (restores routes if connection drops)
+	go d.monitorConnectionFailure()
 
 	return nil
 }
@@ -507,6 +517,8 @@ func (d *Daemon) forwardTUNToServer() {
 
 		if err := d.vpnConn.WritePacket(buf[:n]); err != nil {
 			log.Printf("[vpn] Send error: %v", err)
+			log.Printf("[vpn] Connection to server lost (send failed)")
+			d.signalConnectionFailure()
 			return
 		}
 
@@ -528,6 +540,8 @@ func (d *Daemon) forwardServerToTUN() {
 		packet, err := d.vpnConn.ReadPacket()
 		if err != nil {
 			log.Printf("[vpn] Read error: %v", err)
+			log.Printf("[vpn] Connection to server lost (read failed)")
+			d.signalConnectionFailure()
 			return
 		}
 
@@ -935,4 +949,51 @@ func (d *Daemon) DisableRouteAll() error {
 // GetConnectTo returns the server address for client mode.
 func (d *Daemon) GetConnectTo() string {
 	return d.config.ConnectTo
+}
+
+// signalConnectionFailure signals that the VPN connection has failed.
+// This is called by forwarding goroutines when they encounter a fatal error.
+// Safe to call multiple times - only the first call has any effect.
+func (d *Daemon) signalConnectionFailure() {
+	d.connFailedOnce.Do(func() {
+		log.Printf("[vpn] Signaling connection failure")
+		close(d.connFailed)
+	})
+}
+
+// monitorConnectionFailure waits for a connection failure and restores routing.
+// This ensures that if the VPN connection drops unexpectedly, the user's
+// internet connectivity is restored by removing VPN routes.
+func (d *Daemon) monitorConnectionFailure() {
+	select {
+	case <-d.ctx.Done():
+		// Normal shutdown - routes will be restored in shutdown()
+		return
+	case <-d.connFailed:
+		// Connection failed unexpectedly
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] CONNECTION FAILURE DETECTED")
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] VPN connection to server has been lost")
+		log.Printf("[vpn] Restoring network routes to prevent internet loss...")
+
+		if d.tun != nil && d.config.RouteAll {
+			if err := d.tun.RestoreRouting(); err != nil {
+				log.Printf("[vpn] ERROR: Failed to restore routing: %v", err)
+				log.Printf("[vpn] Manual intervention may be required!")
+				log.Printf("[vpn] Try: sudo route delete default; sudo route add default <your-gateway>")
+			} else {
+				log.Printf("[vpn] SUCCESS: Network routes restored")
+				log.Printf("[vpn] Internet connectivity should be working via direct connection")
+				d.config.RouteAll = false
+			}
+		}
+
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] VPN is disconnected. Restart vpn-node to reconnect.")
+		log.Printf("[vpn] ========================================")
+
+		// Trigger daemon shutdown so it exits cleanly
+		d.cancel()
+	}
 }
