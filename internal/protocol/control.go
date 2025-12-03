@@ -54,6 +54,7 @@ type PeerInfo struct {
 	BytesIn    uint64       `json:"bytes_in"`
 	BytesOut   uint64       `json:"bytes_out"`
 	Latency    string       `json:"latency,omitempty"`
+	Bandwidth  float64      `json:"bandwidth_bps,omitempty"`
 	Geo        *GeoLocation `json:"geo,omitempty"`
 }
 

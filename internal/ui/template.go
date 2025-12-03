@@ -34,28 +34,49 @@ func init() {
             --border: #475569;
         }
 
+        /* Light mode theme */
+        [data-theme="light"] {
+            --bg-primary: #f8fafc;
+            --bg-secondary: #ffffff;
+            --bg-card: #e2e8f0;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #16a34a;
+            --warning: #d97706;
+            --error: #dc2626;
+            --border: #cbd5e1;
+        }
+
+        [data-theme="light"] .sticky-footer {
+            box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.1);
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
-            display: flex;
         }
 
-        /* Sidebar */
-        .sidebar {
-            width: 240px;
+        /* Header bar - scrolls with content */
+        .top-header {
             background: var(--bg-secondary);
-            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
             display: flex;
-            flex-direction: column;
-            position: fixed;
-            height: 100vh;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
         }
 
         .logo {
-            padding: 20px;
-            border-bottom: 1px solid var(--border);
             display: flex;
             align-items: center;
             gap: 12px;
@@ -77,57 +98,47 @@ func init() {
             font-weight: 600;
         }
 
-        .nav {
-            padding: 16px 12px;
-            flex: 1;
-        }
-
-        .nav-item {
+        .header-status {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 12px 16px;
-            border-radius: 8px;
-            cursor: pointer;
-            color: var(--text-secondary);
-            transition: all 0.2s;
-            margin-bottom: 4px;
-        }
-
-        .nav-item:hover {
+            gap: 8px;
+            padding: 6px 12px;
             background: var(--bg-card);
-            color: var(--text-primary);
+            border-radius: 20px;
+            font-size: 13px;
         }
 
-        .nav-item.active {
-            background: var(--accent);
-            color: white;
+        .header-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
         }
 
-        .nav-icon {
-            font-size: 18px;
+        .header-status-dot.offline {
+            background: var(--error);
         }
 
-        .nav-label {
-            font-size: 14px;
-            font-weight: 500;
-        }
-
-        .nav-section {
-            padding: 8px 16px;
-            font-size: 11px;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            letter-spacing: 0.5px;
-            margin-top: 16px;
-        }
-
-        /* Main content */
+        /* Main content - single page */
         .main {
-            margin-left: 240px;
             flex: 1;
             padding: 24px;
-            min-height: 100vh;
+            padding-bottom: 100px; /* Space for sticky footer */
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Section headers */
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
         }
 
         .header {
@@ -734,6 +745,48 @@ func init() {
             cursor: not-allowed;
         }
 
+        /* SSH table cell */
+        .ssh-cell {
+            white-space: nowrap;
+        }
+
+        .ssh-table-btn {
+            padding: 4px 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        .ssh-table-btn:hover {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .ssh-cmd {
+            font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+            font-size: 11px;
+            background: var(--bg-card);
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            vertical-align: middle;
+        }
+
+        .ssh-cmd:hover {
+            background: var(--accent);
+            color: white;
+        }
+
         /* Network peers grid */
         .peers-grid {
             display: grid;
@@ -1057,219 +1110,234 @@ func init() {
             background: var(--accent-hover);
         }
 
-        /* Footer */
-        .footer {
+        /* Sticky Footer with VPN controls - always on top */
+        .sticky-footer {
             position: fixed;
             bottom: 0;
-            left: 240px;
+            left: 0;
             right: 0;
-            padding: 8px 24px;
+            padding: 12px 24px;
             background: var(--bg-secondary);
             border-top: 1px solid var(--border);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            z-index: 99999;
+            box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .footer-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .footer-vpn-control {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .footer-vpn-label {
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .footer-vpn-status {
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: 12px;
+        }
+
+        .footer-vpn-status.on {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--success);
+        }
+
+        .footer-vpn-status.off {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error);
+        }
+
+        .footer-center {
+            display: flex;
+            align-items: center;
+            gap: 16px;
             font-size: 12px;
             color: var(--text-secondary);
-            z-index: 100;
+        }
+
+        .footer-ip {
+            font-family: monospace;
+            padding: 4px 10px;
+            background: var(--bg-card);
+            border-radius: 6px;
+        }
+
+        .footer-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .footer-btn {
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .footer-btn:hover {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .footer-btn.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .footer-btn.primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .footer-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         .footer-version {
             font-family: monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
         }
 
-        .footer-status {
+        /* Theme toggle button */
+        .theme-toggle {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            cursor: pointer;
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: center;
+            transition: all 0.3s ease;
         }
 
-        .footer-status-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--success);
+        .theme-toggle:hover {
+            background: var(--accent);
+            border-color: var(--accent);
         }
 
-        .footer-status-dot.offline {
-            background: var(--error);
+        .theme-toggle svg {
+            width: 18px;
+            height: 18px;
+            fill: var(--text-primary);
+            transition: transform 0.3s ease;
         }
 
-        /* Adjust main content for footer */
-        .main {
-            margin-left: 240px;
-            flex: 1;
-            padding: 24px;
-            padding-bottom: 60px;
-            min-height: 100vh;
+        .theme-toggle:hover svg {
+            transform: rotate(15deg);
         }
+
+        /* Hide sun in dark mode, show moon */
+        .theme-toggle .sun-icon { display: none; }
+        .theme-toggle .moon-icon { display: block; }
+
+        /* Light mode: show sun, hide moon */
+        [data-theme="light"] .theme-toggle .sun-icon { display: block; }
+        [data-theme="light"] .theme-toggle .moon-icon { display: none; }
     </style>
 </head>
 <body>
-    <!-- Sidebar -->
-    <aside class="sidebar">
-        <div class="logo">
-            <div class="logo-icon">V</div>
-            <span class="logo-text">VPN Mesh</span>
-        </div>
-        <nav class="nav">
-            <div class="nav-item active" data-page="home">
-                <span class="nav-icon">&#127968;</span>
-                <span class="nav-label">Home</span>
+    <!-- Top Header -->
+    <header class="top-header">
+        <div class="header-left">
+            <div class="logo">
+                <div class="logo-icon">V</div>
+                <span class="logo-text">VPN Mesh</span>
             </div>
-            <div class="nav-item" data-page="overview">
-                <span class="nav-icon">&#128200;</span>
-                <span class="nav-label">Overview</span>
-            </div>
-            <div class="nav-item" data-page="observability">
-                <span class="nav-icon">&#128269;</span>
-                <span class="nav-label">Observability</span>
-            </div>
-            <div class="nav-section">Network</div>
-            <div class="nav-item" data-page="peers">
-                <span class="nav-icon">&#128101;</span>
-                <span class="nav-label">Peers</span>
-            </div>
-            <div class="nav-item" data-page="verify">
-                <span class="nav-icon">&#9989;</span>
-                <span class="nav-label">Verify</span>
-            </div>
-        </nav>
-        <div class="sidebar-status">
-            <div class="sidebar-status-row">
-                <span class="sidebar-status-label">VPN Routing</span>
-                <div class="sidebar-mini-toggle" id="sidebar-vpn-toggle" onclick="toggleVPN()">
-                    <div class="mini-knob"></div>
-                </div>
-            </div>
-            <div class="sidebar-status-row">
-                <span class="sidebar-status-label" id="sidebar-vpn-status">Checking...</span>
+            <div class="header-status">
+                <span class="header-status-dot" id="header-status-dot"></span>
+                <span id="header-status-text">Connecting...</span>
             </div>
         </div>
-    </aside>
+        <div class="stats-grid" style="margin:0; gap:12px;">
+            <div class="stat-card" style="padding:10px 16px; margin:0;">
+                <div class="stat-label">Node</div>
+                <div class="stat-value small" id="home-node-name">-</div>
+            </div>
+            <div class="stat-card" style="padding:10px 16px; margin:0;">
+                <div class="stat-label">VPN IP</div>
+                <div class="stat-value small" id="home-vpn-ip">-</div>
+            </div>
+            <div class="stat-card" style="padding:10px 16px; margin:0;">
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value small" id="home-uptime">-</div>
+            </div>
+            <div class="stat-card" style="padding:10px 16px; margin:0;">
+                <div class="stat-label">Version</div>
+                <div class="stat-value small" id="home-version">-</div>
+            </div>
+        </div>
+    </header>
 
-    <!-- Main content -->
+    <!-- Main content - single scrollable page -->
     <main class="main">
-        <!-- Home page -->
-        <div id="home" class="page active">
-            <div class="header">
-                <h1 class="page-title">Welcome</h1>
-                <div class="status-badge">
-                    <span class="status-dot" id="home-status-dot"></span>
-                    <span id="home-status-text">Connecting...</span>
-                </div>
-            </div>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Node Name</div>
-                    <div class="stat-value small" id="home-node-name">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">VPN IP</div>
-                    <div class="stat-value small" id="home-vpn-ip">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Uptime</div>
-                    <div class="stat-value small" id="home-uptime">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Version</div>
-                    <div class="stat-value small" id="home-version">-</div>
-                </div>
-            </div>
-            <!-- Network Peers Section -->
-            <div class="chart-container">
-                <div class="chart-header">
-                    <span class="chart-title">Network Peers</span>
-                    <button class="chart-btn" onclick="loadNetworkPeers()">Refresh</button>
-                </div>
-                <div id="network-peers-container" class="peers-grid">
-                    <div class="loading"><div class="spinner"></div></div>
-                </div>
+        <!-- Section 1: Network Map -->
+        <div class="section-header">
+            <h2 class="section-title">Network Map</h2>
+            <div class="chart-controls">
+                <button class="chart-btn" onclick="fitNetworkMap()">Fit to Nodes</button>
             </div>
         </div>
-
-        <!-- Overview page -->
-        <div id="overview" class="page">
-            <div class="header">
-                <h1 class="page-title">Overview</h1>
-                <div class="status-badge">
-                    <span class="status-dot" id="overview-status-dot"></span>
-                    <span id="overview-status-text">Loading...</span>
-                </div>
-            </div>
-
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-label">Node Name</div>
-                    <div class="stat-value small" id="stat-name">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">VPN IP</div>
-                    <div class="stat-value small" id="stat-vpn-ip">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Uptime</div>
-                    <div class="stat-value" id="stat-uptime">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Connected Peers</div>
-                    <div class="stat-value" id="stat-peers">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Traffic In</div>
-                    <div class="stat-value" id="stat-in">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Traffic Out</div>
-                    <div class="stat-value" id="stat-out">-</div>
-                </div>
-            </div>
-
-            <div class="chart-container">
-                <div class="chart-header">
-                    <span class="chart-title">Bandwidth</span>
-                    <div class="chart-controls">
-                        <button class="chart-btn bw-range active" data-range="-5m">5m</button>
-                        <button class="chart-btn bw-range" data-range="-15m">15m</button>
-                        <button class="chart-btn bw-range" data-range="-1h">1h</button>
-                    </div>
-                </div>
-                <div class="chart-wrapper">
-                    <canvas id="bandwidth-chart"></canvas>
-                </div>
-            </div>
-
-            <div class="table-container" id="peers-table-container">
-                <div class="table-header">
-                    <span class="table-title">Connected Peers</span>
-                </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>VPN IP</th>
-                            <th>Public IP</th>
-                            <th>Connected</th>
-                        </tr>
-                    </thead>
-                    <tbody id="peers-tbody">
-                    </tbody>
-                </table>
-            </div>
+        <div class="network-graph-container" style="margin-bottom: 24px;">
+            <div id="network-graph"></div>
         </div>
 
-        <!-- Observability page -->
-        <div id="observability" class="page">
-            <div class="header">
-                <h1 class="page-title">Observability</h1>
-                <div class="chart-controls">
-                    <button class="chart-btn metrics-range active" data-range="-5m">5m</button>
-                    <button class="chart-btn metrics-range" data-range="-15m">15m</button>
-                    <button class="chart-btn metrics-range" data-range="-1h">1h</button>
-                    <button class="chart-btn metrics-range" data-range="-6h">6h</button>
-                </div>
+        <!-- Section 2: Peers Table -->
+        <div class="section-header">
+            <h2 class="section-title">Network Nodes</h2>
+            <span style="color: var(--text-secondary); font-size: 12px;" id="topology-node-count"></span>
+        </div>
+        <div class="table-container" style="margin-bottom: 24px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort="distance">Distance</th>
+                        <th class="sortable" data-sort="name">Name</th>
+                        <th>VPN IP</th>
+                        <th>Public IP</th>
+                        <th class="sortable" data-sort="latency">Latency</th>
+                        <th class="sortable" data-sort="bandwidth">Bandwidth</th>
+                        <th>Status</th>
+                        <th>SSH</th>
+                    </tr>
+                </thead>
+                <tbody id="all-peers-tbody">
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Section 3: Observability -->
+        <div class="section-header">
+            <h2 class="section-title">Observability</h2>
+            <div class="chart-controls">
+                <button class="chart-btn metrics-range active" data-range="-5m">5m</button>
+                <button class="chart-btn metrics-range" data-range="-15m">15m</button>
+                <button class="chart-btn metrics-range" data-range="-1h">1h</button>
+                <button class="chart-btn metrics-range" data-range="-6h">6h</button>
             </div>
+        </div>
 
             <div class="metrics-grid">
                 <div class="chart-container">
@@ -1339,77 +1407,35 @@ func init() {
                     <div class="loading"><div class="spinner"></div></div>
                 </div>
             </div>
-        </div>
-
-        <!-- Peers page -->
-        <div id="peers" class="page">
-            <div class="header">
-                <h1 class="page-title">Network Topology</h1>
-            </div>
-
-            <!-- Network Map -->
-            <div class="network-graph-container">
-                <div class="graph-header">
-                    <span class="graph-title">Network Map</span>
-                    <div class="chart-controls">
-                        <button class="chart-btn" onclick="fitNetworkMap()">Fit to Nodes</button>
-                        <button class="chart-btn" onclick="toggleMapStyle()">Toggle Style</button>
-                    </div>
-                </div>
-                <div id="network-graph"></div>
-            </div>
-
-            <!-- Peers Table with Distance, Latency, Bandwidth -->
-            <div class="table-container">
-                <div class="table-header">
-                    <span class="table-title">All Network Nodes</span>
-                    <span style="color: var(--text-secondary); font-size: 12px;" id="topology-node-count"></span>
-                </div>
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="sortable" data-sort="distance">Distance</th>
-                            <th class="sortable" data-sort="name">Name</th>
-                            <th>VPN IP</th>
-                            <th>Public IP</th>
-                            <th class="sortable" data-sort="latency">Latency</th>
-                            <th class="sortable" data-sort="bandwidth">Bandwidth</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="all-peers-tbody">
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Verify page -->
-        <div id="verify" class="page">
-            <div class="header">
-                <h1 class="page-title">Routing Verification</h1>
-            </div>
-            <div class="verify-card">
-                <div class="verify-title">VPN Routing Status</div>
-                <div class="verify-row">
-                    <span class="verify-label">Public IP</span>
-                    <span class="verify-value" id="verify-public-ip">Checking...</span>
-                </div>
-                <div class="verify-row">
-                    <span class="verify-label">VPN IP</span>
-                    <span class="verify-value" id="verify-vpn-ip">-</span>
-                </div>
-                <div class="verify-row">
-                    <span class="verify-label">Expected Server IP</span>
-                    <span class="verify-value">95.217.238.72 (Helsinki)</span>
-                </div>
-                <div class="verify-row">
-                    <span class="verify-label">Routing Status</span>
-                    <span class="verify-value" id="verify-status">Checking...</span>
-                </div>
-            </div>
-            <button class="action-btn" onclick="loadVerify()">Refresh</button>
-        </div>
     </main>
+
+    <!-- Sticky Footer with VPN controls -->
+    <footer class="sticky-footer">
+        <div class="footer-left">
+            <div class="footer-vpn-control">
+                <span class="footer-vpn-label">VPN Routing</span>
+                <span class="footer-vpn-status" id="footer-vpn-status">-</span>
+                <div class="toggle-switch" id="footer-vpn-toggle" onclick="toggleVPN()">
+                    <div class="toggle-knob"></div>
+                </div>
+            </div>
+        </div>
+        <div class="footer-center">
+            <span>Public IP:</span>
+            <span class="footer-ip" id="footer-public-ip">Checking...</span>
+            <span id="footer-verify-status"></span>
+        </div>
+        <div class="footer-right">
+            <button class="footer-btn" onclick="loadVerify()">
+                <span>&#9989;</span> Verify
+            </button>
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">
+                <svg class="sun-icon" viewBox="0 0 24 24"><path d="M12 7a5 5 0 100 10 5 5 0 000-10zm0-5a1 1 0 011 1v2a1 1 0 11-2 0V3a1 1 0 011-1zm0 18a1 1 0 011 1v2a1 1 0 11-2 0v-2a1 1 0 011-1zm9-9a1 1 0 110 2h-2a1 1 0 110-2h2zM5 12a1 1 0 110 2H3a1 1 0 110-2h2zm14.07-6.07a1 1 0 010 1.41l-1.41 1.42a1 1 0 11-1.42-1.42l1.42-1.41a1 1 0 011.41 0zM7.76 16.24a1 1 0 010 1.41l-1.42 1.42a1 1 0 11-1.41-1.42l1.41-1.41a1 1 0 011.42 0zm10.48 0a1 1 0 011.42 0l1.41 1.41a1 1 0 11-1.41 1.42l-1.42-1.42a1 1 0 010-1.41zM7.76 7.76a1 1 0 01-1.42 0L4.93 6.34a1 1 0 111.41-1.41l1.42 1.41a1 1 0 010 1.42z"/></svg>
+                <svg class="moon-icon" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1111.21 3a7 7 0 109.79 9.79z"/></svg>
+            </button>
+            <span class="footer-version" id="footer-version">v-</span>
+        </div>
+    </footer>
 
     <!-- Terminal Modal for SSH -->
     <div id="terminal-modal" class="terminal-modal" onclick="closeTerminalOnBackdrop(event)">
@@ -1449,27 +1475,34 @@ func init() {
         Chart.defaults.maintainAspectRatio = false;
         Chart.defaults.responsive = true;
 
-        // Navigation
-        document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', () => {
-                const page = item.dataset.page;
+        // Load all dashboard data for single-page layout
+        async function loadDashboard() {
+            try {
+                // Load status for header
+                const status = await loadStatus();
+                document.getElementById('home-node-name').textContent = status.node_name || '-';
+                document.getElementById('home-vpn-ip').textContent = status.vpn_address || '-';
+                document.getElementById('home-uptime').textContent = status.uptime_str || '-';
+                document.getElementById('home-version').textContent = 'v' + (status.version || '0.1.0');
+                document.getElementById('footer-version').textContent = 'v' + (status.version || '0.1.0');
+                isServerMode = status.server_mode || false;
 
-                // Update nav
-                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-                item.classList.add('active');
+                // Load VPN connection status for footer
+                await loadConnectionStatus();
 
-                // Update pages
-                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-                document.getElementById(page).classList.add('active');
+                // Load topology (map + peers table)
+                await loadPeers();
 
-                // Load data for the page
-                if (page === 'home') loadHome();
-                if (page === 'overview') loadOverview();
-                if (page === 'observability') loadObservability();
-                if (page === 'peers') loadPeers();
-                if (page === 'verify') loadVerify();
-            });
-        });
+                // Load observability (metrics + logs)
+                await loadObservability();
+
+                // Load verify for footer IP
+                await loadVerify();
+
+            } catch (err) {
+                console.error('Failed to load dashboard:', err);
+            }
+        }
 
         // Format bytes
         function formatBytes(bytes) {
@@ -2449,6 +2482,11 @@ func init() {
                     const statusColor = isUs || n.is_direct ? 'var(--success)' : 'var(--text-secondary)';
                     const statusText = isUs ? 'Local' : (n.is_direct ? 'Direct' : 'Via Relay');
 
+                    // SSH command - uses VPN internal IP, root for linux, miguel_lemos for darwin
+                    const sshUser = n.os === 'linux' ? 'root' : 'miguel_lemos';
+                    const sshCmd = ` + "`" + `ssh ${sshUser}@${n.vpn_address}` + "`" + `;
+                    const sshDisabled = isUs;
+
                     return ` + "`" + `
                         <tr>
                             <td><span class="distance-badge ${distanceClass}">${distanceLabel}</span></td>
@@ -2463,11 +2501,23 @@ func init() {
                             <td>${n.latency_ms ? n.latency_ms.toFixed(1) + ' ms' : '-'}</td>
                             <td>${n.bandwidth_bps ? formatBytes(n.bandwidth_bps) + '/s' : '-'}</td>
                             <td style="color: ${statusColor}">${statusText}</td>
+                            <td class="ssh-cell">
+                                ${sshDisabled ? '<span style="color: var(--text-secondary)">-</span>' : ` + "`" + `
+                                    <button class="ssh-table-btn" onclick="openSSHTerminal('${n.name || 'Unknown'}', '${sshCmd}')" title="Open SSH terminal">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <rect x="2" y="3" width="20" height="18" rx="2"/>
+                                            <path d="M7 8l4 4-4 4"/>
+                                            <line x1="13" y1="16" x2="17" y2="16"/>
+                                        </svg>
+                                    </button>
+                                    <code class="ssh-cmd" onclick="copySSHCommand('${sshCmd}')" title="Click to copy">${sshCmd}</code>
+                                ` + "`" + `}
+                            </td>
                         </tr>
                     ` + "`" + `;
                 }).join('');
             } else {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-secondary)">No nodes in network</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary)">No nodes in network</td></tr>';
             }
 
             // Update sortable headers
@@ -2496,32 +2546,24 @@ func init() {
         // Load verify page
         async function loadVerify() {
             try {
-                // Get node status
-                const status = await loadStatus();
-                document.getElementById('verify-vpn-ip').textContent = status.vpn_address || '-';
-
-                // Check public IP
-                document.getElementById('verify-public-ip').textContent = 'Checking...';
-                document.getElementById('verify-status').textContent = 'Checking...';
-                document.getElementById('verify-status').className = 'verify-value';
-
                 const ipRes = await fetch('/api/verify');
                 const ipData = await ipRes.json();
 
-                document.getElementById('verify-public-ip').textContent = ipData.public_ip || 'Unknown';
+                const publicIp = ipData.public_ip || 'Unknown';
+                document.getElementById('footer-public-ip').textContent = publicIp;
 
-                if (ipData.public_ip === HELSINKI_IP) {
-                    document.getElementById('verify-status').textContent = 'VERIFIED - Traffic routed through VPN';
-                    document.getElementById('verify-status').className = 'verify-value success';
+                const verifyStatus = document.getElementById('footer-verify-status');
+                if (publicIp === HELSINKI_IP) {
+                    verifyStatus.textContent = '(Routed)';
+                    verifyStatus.style.color = 'var(--success)';
                 } else {
-                    document.getElementById('verify-status').textContent = 'NOT ROUTED - Traffic going direct';
-                    document.getElementById('verify-status').className = 'verify-value error';
+                    verifyStatus.textContent = '(Direct)';
+                    verifyStatus.style.color = 'var(--warning)';
                 }
             } catch (err) {
                 console.error('Failed to verify:', err);
-                document.getElementById('verify-public-ip').textContent = 'Error';
-                document.getElementById('verify-status').textContent = 'Failed to check';
-                document.getElementById('verify-status').className = 'verify-value error';
+                document.getElementById('footer-public-ip').textContent = 'Error';
+                document.getElementById('footer-verify-status').textContent = '';
             }
         }
 
@@ -2570,13 +2612,10 @@ func init() {
             };
         }
 
-        // Auto refresh
+        // Auto refresh - single page layout refreshes all sections
         function startRefresh() {
             refreshInterval = setInterval(() => {
-                const activePage = document.querySelector('.page.active')?.id;
-                if (activePage === 'home') loadHome();
-                if (activePage === 'overview') loadOverview();
-                if (activePage === 'observability') loadObservability();
+                loadDashboard();
             }, 5000);
         }
 
@@ -2602,13 +2641,13 @@ func init() {
                 return status;
             } catch (err) {
                 console.error('Failed to load connection status:', err);
-                document.getElementById('sidebar-vpn-status').textContent = 'Error';
+                document.getElementById('footer-vpn-status').textContent = 'Error';
             }
         }
 
         function updateToggleUI() {
-            const toggle = document.getElementById('sidebar-vpn-toggle');
-            const statusText = document.getElementById('sidebar-vpn-status');
+            const toggle = document.getElementById('footer-vpn-toggle');
+            const statusText = document.getElementById('footer-vpn-status');
 
             // Server mode: toggle is not applicable, disable it
             if (isServerMode) {
@@ -2694,8 +2733,33 @@ func init() {
             }
         }
 
+        // Theme toggle function
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+
+            if (newTheme === 'dark') {
+                html.removeAttribute('data-theme');
+            } else {
+                html.setAttribute('data-theme', 'light');
+            }
+
+            // Save preference
+            localStorage.setItem('vpn-theme', newTheme);
+        }
+
+        // Load saved theme preference
+        function loadTheme() {
+            const saved = localStorage.getItem('vpn-theme');
+            if (saved === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+        }
+
         // Initialize
-        loadHome();
+        loadTheme();
+        loadDashboard();
         loadConnectionStatus();
         startRefresh();
 

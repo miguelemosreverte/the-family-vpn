@@ -108,6 +108,16 @@ func (d *Daemon) handlePeers(enc *json.Encoder, req *protocol.Request) {
 			BytesIn:    p.BytesIn,
 			BytesOut:   p.BytesOut,
 		}
+
+		// Look up peer in topology for Latency and Bandwidth
+		if d.topology != nil {
+			if node := d.topology.GetNode(p.VPNAddress); node != nil {
+				if node.LatencyMs > 0 {
+					peerInfos[i].Latency = fmt.Sprintf("%.1f ms", node.LatencyMs)
+				}
+				peerInfos[i].Bandwidth = node.Bandwidth
+			}
+		}
 	}
 
 	d.sendResult(enc, req.ID, protocol.PeersResult{Peers: peerInfos})

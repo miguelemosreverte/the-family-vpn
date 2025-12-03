@@ -326,3 +326,15 @@ func (t *NetworkTopology) SetOurGeo(geo *protocol.GeoLocation) {
 		node.Geo = geo
 	}
 }
+
+// GetNode returns a copy of a node by VPN address, or nil if not found.
+func (t *NetworkTopology) GetNode(vpnAddr string) *NetworkNode {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if node, ok := t.nodes[vpnAddr]; ok {
+		nodeCopy := *node
+		return &nodeCopy
+	}
+	return nil
+}
