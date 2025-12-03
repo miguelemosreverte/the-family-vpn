@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -57,6 +58,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/connection", s.handleConnection)
 	mux.HandleFunc("/api/topology", s.handleTopology)
 	mux.HandleFunc("/api/network_peers", s.handleNetworkPeers)
+	mux.HandleFunc("/api/vnc-config", s.handleVNCConfig)
 
 	// WebSocket terminal
 	mux.HandleFunc("/ws/terminal", s.handleTerminal)
@@ -332,6 +334,17 @@ func (s *Server) handleNetworkPeers(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(peers)
+}
+
+// handleVNCConfig returns VNC configuration for screen sharing.
+// The password is read from the VNC_PASSWORD environment variable (loaded from .env file).
+func (s *Server) handleVNCConfig(w http.ResponseWriter, r *http.Request) {
+	password := os.Getenv("VNC_PASSWORD")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"password": password,
+	})
 }
 
 // Placeholder for compile - will be replaced with actual HTML

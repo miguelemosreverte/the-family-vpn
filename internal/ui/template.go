@@ -770,6 +770,30 @@ func init() {
             color: white;
         }
 
+        /* Screen Share table cell */
+        .screen-cell {
+            white-space: nowrap;
+        }
+
+        .screen-table-btn {
+            padding: 4px 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 12px;
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+        }
+
+        .screen-table-btn:hover {
+            background: #8b5cf6;
+            border-color: #8b5cf6;
+            color: white;
+        }
+
         .ssh-cmd {
             font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
             font-size: 11px;
@@ -1321,6 +1345,7 @@ func init() {
                         <th class="sortable" data-sort="bandwidth">Bandwidth</th>
                         <th>Status</th>
                         <th>SSH</th>
+                        <th>Screen</th>
                     </tr>
                 </thead>
                 <tbody id="all-peers-tbody">
@@ -1680,6 +1705,34 @@ func init() {
 
             // Initialize xterm.js
             initTerminal(user, host);
+        }
+
+        // Open Screen Sharing (VNC) to a macOS peer
+        // Password is fetched from the server (loaded from .env file)
+        async function openScreenShare(vpnAddress, user) {
+            try {
+                // Fetch VNC password from server (loaded from .env file)
+                const response = await fetch('/api/vnc-config');
+                if (!response.ok) {
+                    throw new Error('Failed to get VNC configuration');
+                }
+                const config = await response.json();
+
+                if (!config.password) {
+                    alert('VNC password not configured. Please set VNC_PASSWORD in your .env file.');
+                    return;
+                }
+
+                // Construct VNC URL: vnc://user:password@host
+                // macOS Screen Sharing.app will handle this URL
+                const vncUrl = 'vnc://' + user + ':' + config.password + '@' + vpnAddress;
+
+                // Open VNC URL - this will launch Screen Sharing.app on macOS
+                window.location.href = vncUrl;
+            } catch (err) {
+                console.error('Screen share error:', err);
+                alert('Failed to open Screen Sharing: ' + err.message);
+            }
         }
 
         // Initialize xterm.js terminal
@@ -2513,11 +2566,22 @@ func init() {
                                     <code class="ssh-cmd" onclick="copySSHCommand('${sshCmd}')" title="Click to copy">${sshCmd}</code>
                                 ` + "`" + `}
                             </td>
+                            <td class="screen-cell">
+                                ${(sshDisabled || n.os === 'linux') ? '<span style="color: var(--text-secondary)">-</span>' : ` + "`" + `
+                                    <button class="screen-table-btn" onclick="openScreenShare('${n.vpn_address}', '${sshUser}')" title="Open Screen Sharing (VNC)">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <rect x="2" y="3" width="20" height="14" rx="2"/>
+                                            <line x1="8" y1="21" x2="16" y2="21"/>
+                                            <line x1="12" y1="17" x2="12" y2="21"/>
+                                        </svg>
+                                    </button>
+                                ` + "`" + `}
+                            </td>
                         </tr>
                     ` + "`" + `;
                 }).join('');
             } else {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary)">No nodes in network</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-secondary)">No nodes in network</td></tr>';
             }
 
             // Update sortable headers
