@@ -45,10 +45,9 @@ type Config struct {
 	// RouteAll: if true, route all traffic through VPN (client mode)
 	RouteAll bool `yaml:"route_all"`
 
-	// AutoReconnect: if true, automatically reconnect when connection is lost (client mode)
-	// Default: false (development mode shows connection issues)
-	// In production, set to true for resilience
-	AutoReconnect bool `yaml:"auto_reconnect"`
+	// ReconnectCount tracks how many times we've reconnected this session
+	// Used for uptime statistics to detect excessive reconnections
+	ReconnectCount int `yaml:"-"`
 
 	// Data directory for SQLite storage
 	DataDir string `yaml:"data_dir"`
@@ -656,11 +655,7 @@ func (d *Daemon) forwardServerToTUN() {
 				d.serverRestartMu.Lock()
 				d.serverRestarting = true
 				d.serverRestartMu.Unlock()
-				if d.config.AutoReconnect {
-					log.Printf("[vpn] Auto-reconnect enabled - will attempt to reconnect")
-				} else {
-					log.Printf("[vpn] Auto-reconnect disabled - connection will be lost")
-				}
+				log.Printf("[vpn] Auto-reconnect is always enabled - will attempt to reconnect")
 				continue
 			}
 
@@ -1195,32 +1190,22 @@ func (d *Daemon) monitorConnectionFailure() {
 			d.store.WriteLifecycleEvent("CONNECTION_LOST", reason, uptime, wasRoutingAll, routeRestored, Version)
 		}
 
-		// Check if auto-reconnect is enabled
-		if d.config.AutoReconnect {
-			log.Printf("[vpn] ========================================")
-			log.Printf("[vpn] AUTO-RECONNECT ENABLED")
-			log.Printf("[vpn] ========================================")
-			log.Printf("[vpn] Will attempt to reconnect with exponential backoff...")
-			d.attemptReconnect(wasRoutingAll)
-		} else {
-			log.Printf("[vpn] ========================================")
-			log.Printf("[vpn] VPN is disconnected.")
-			if serverRestarting {
-				log.Printf("[vpn] Server restart detected. Auto-reconnect is disabled.")
-				log.Printf("[vpn] Enable with --auto-reconnect flag for automatic reconnection.")
-			}
-			log.Printf("[vpn] Restart vpn-node to reconnect.")
-			log.Printf("[vpn] ========================================")
-
-			// Trigger daemon shutdown so it exits cleanly
-			d.cancel()
-		}
+		// Auto-reconnect is always enabled for resilience
+		// Reconnection statistics are tracked to detect excessive reconnections
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] AUTO-RECONNECT")
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] Reconnection count this session: %d", d.config.ReconnectCount)
+		log.Printf("[vpn] Will attempt to reconnect with exponential backoff...")
+		d.attemptReconnect(wasRoutingAll)
 	}
 }
 
 // attemptReconnect tries to reconnect to the server with exponential backoff.
-// This is only called when auto-reconnect is enabled.
+// Auto-reconnect is always enabled for client mode.
 func (d *Daemon) attemptReconnect(restoreRouteAll bool) {
+	// Increment reconnection count for statistics
+	d.config.ReconnectCount++
 	maxRetries := 30 // Try for up to ~5 minutes with exponential backoff
 	baseDelay := time.Second
 	maxDelay := 30 * time.Second

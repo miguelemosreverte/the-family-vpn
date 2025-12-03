@@ -79,15 +79,16 @@ func (d *Daemon) handleStatus(enc *json.Encoder, req *protocol.Request) {
 	bytesIn, bytesOut := d.Stats()
 
 	result := protocol.StatusResult{
-		NodeName:   d.config.NodeName,
-		Version:    Version,
-		Uptime:     uptime,
-		UptimeStr:  formatDuration(uptime),
-		VPNAddress: d.config.VPNAddress,
-		PeerCount:  d.PeerCount(),
-		BytesIn:    bytesIn,
-		BytesOut:   bytesOut,
-		ServerMode: d.config.ServerMode,
+		NodeName:       d.config.NodeName,
+		Version:        Version,
+		Uptime:         uptime,
+		UptimeStr:      formatDuration(uptime),
+		VPNAddress:     d.config.VPNAddress,
+		PeerCount:      d.PeerCount(),
+		BytesIn:        bytesIn,
+		BytesOut:       bytesOut,
+		ServerMode:     d.config.ServerMode,
+		ReconnectCount: d.config.ReconnectCount,
 	}
 
 	d.sendResult(enc, req.ID, result)

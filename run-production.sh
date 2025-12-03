@@ -3,12 +3,12 @@
 # Production VPN Launcher
 # =======================
 # This script starts the VPN client with production settings:
-# - Auto-reconnect enabled (resilience on server restarts)
+# - Auto-reconnect is ALWAYS enabled (built into vpn-node)
 # - Route all traffic through VPN (full VPN mode)
 # - Proper logging and monitoring
 #
-# In development, run vpn-node directly without --auto-reconnect
-# to see connection issues immediately.
+# Auto-reconnect uses exponential backoff (1s to 30s).
+# Reconnection count is tracked for uptime statistics.
 #
 # Usage:
 #   ./run-production.sh                    # Interactive mode
@@ -40,7 +40,7 @@ print_banner() {
     echo "║  Client Name:   $VPN_NAME"
     echo "║  Control Port:  $CONTROL_PORT"
     echo "║  UI Port:       $UI_PORT"
-    echo "║  Auto-Reconnect: ENABLED"
+    echo "║  Auto-Reconnect: ALWAYS ON"
     echo "║  Route All:     ENABLED"
     echo "╚═══════════════════════════════════════════════════╝"
     echo -e "${NC}"
@@ -115,10 +115,10 @@ run_vpn() {
 
     echo -e "${GREEN}Starting VPN client in PRODUCTION mode...${NC}"
     echo ""
-    echo "Production features enabled:"
-    echo "  - Auto-reconnect on connection loss"
+    echo "Production features (built-in):"
+    echo "  - Auto-reconnect always enabled"
     echo "  - Exponential backoff (1s to 30s)"
-    echo "  - Automatic route restoration on server restart"
+    echo "  - Reconnection count tracked for statistics"
     echo ""
 
     if [ "$BACKGROUND" = true ]; then
@@ -129,7 +129,6 @@ run_vpn() {
             --listen-control "127.0.0.1:$CONTROL_PORT" \
             --listen-ui "localhost:$UI_PORT" \
             --route-all \
-            --auto-reconnect \
             > /var/log/vpn-node.log 2>&1 &
 
         echo "VPN started in background (PID: $!)"
@@ -146,8 +145,7 @@ run_vpn() {
             --name "$VPN_NAME" \
             --listen-control "127.0.0.1:$CONTROL_PORT" \
             --listen-ui "localhost:$UI_PORT" \
-            --route-all \
-            --auto-reconnect
+            --route-all
     fi
 }
 

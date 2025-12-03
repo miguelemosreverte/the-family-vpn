@@ -30,15 +30,16 @@ type Error struct {
 
 // StatusResult is returned by the "status" method.
 type StatusResult struct {
-	NodeName   string        `json:"node_name"`
-	Version    string        `json:"version"`
-	Uptime     time.Duration `json:"uptime"`
-	UptimeStr  string        `json:"uptime_str"`
-	VPNAddress string        `json:"vpn_address"`
-	PeerCount  int           `json:"peer_count"`
-	BytesIn    uint64        `json:"bytes_in"`
-	BytesOut   uint64        `json:"bytes_out"`
-	ServerMode bool          `json:"server_mode"` // True if this is a server node
+	NodeName       string        `json:"node_name"`
+	Version        string        `json:"version"`
+	Uptime         time.Duration `json:"uptime"`
+	UptimeStr      string        `json:"uptime_str"`
+	VPNAddress     string        `json:"vpn_address"`
+	PeerCount      int           `json:"peer_count"`
+	BytesIn        uint64        `json:"bytes_in"`
+	BytesOut       uint64        `json:"bytes_out"`
+	ServerMode     bool          `json:"server_mode"`     // True if this is a server node
+	ReconnectCount int           `json:"reconnect_count"` // Number of reconnections this session
 }
 
 // PeerInfo represents a connected peer.
