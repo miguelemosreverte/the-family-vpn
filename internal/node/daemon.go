@@ -445,6 +445,19 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 	log.Printf("[vpn] Client registered: %s (%s) -> %s (encryption: %v)",
 		peerInfo.Hostname, peerInfo.OS, vpnIP, encryption)
 
+	// Add peer to topology
+	if d.topology != nil {
+		d.topology.AddDirectPeer(&NetworkNode{
+			Name:        peerInfo.Hostname,
+			VPNAddress:  vpnIP,
+			PublicAddr:  remoteAddr,
+			OS:          peerInfo.OS,
+			Version:     peerInfo.Version,
+			ConnectedAt: time.Now(),
+			Geo:         peerGeo,
+		})
+	}
+
 	// Broadcast updated peer list to all clients
 	d.broadcastPeerList()
 
@@ -459,6 +472,11 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 	d.peerConnsMu.Lock()
 	delete(d.peerConns, vpnIP)
 	d.peerConnsMu.Unlock()
+
+	// Remove peer from topology
+	if d.topology != nil {
+		d.topology.RemovePeer(vpnIP)
+	}
 
 	// Broadcast updated peer list after disconnect
 	d.broadcastPeerList()
