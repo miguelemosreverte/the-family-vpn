@@ -599,10 +599,22 @@ func (d *Daemon) forwardTUNToServer() {
 		default:
 		}
 
+		// Check if connection is still valid (may be nil during reconnect)
+		if d.vpnConn == nil {
+			log.Printf("[vpn] Connection not available, stopping TUN->Server forwarder")
+			return
+		}
+
 		n, err := d.tun.Read(buf)
 		if err != nil {
 			log.Printf("[tun] Read error: %v", err)
 			continue
+		}
+
+		// Double-check connection before write (race condition protection)
+		if d.vpnConn == nil {
+			log.Printf("[vpn] Connection lost during read, stopping TUN->Server forwarder")
+			return
 		}
 
 		if err := d.vpnConn.WritePacket(buf[:n]); err != nil {
@@ -625,6 +637,12 @@ func (d *Daemon) forwardServerToTUN() {
 		case <-d.ctx.Done():
 			return
 		default:
+		}
+
+		// Check if connection is still valid (may be nil during reconnect)
+		if d.vpnConn == nil {
+			log.Printf("[vpn] Connection not available, stopping Server->TUN forwarder")
+			return
 		}
 
 		packet, err := d.vpnConn.ReadPacket()
