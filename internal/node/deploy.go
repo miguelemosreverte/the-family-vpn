@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -264,6 +265,17 @@ func (d *Daemon) rebuildBinariesSelective(updates VersionUpdates) error {
 			return fmt.Errorf("failed to build vpn-node: %w: %s", err, output)
 		}
 		binariesToSign = append(binariesToSign, "bin/vpn-node")
+
+		// On Linux servers, copy to /usr/local/bin for systemd service
+		if !d.isMacOS() {
+			srcPath := filepath.Join(projectRoot, "bin", "vpn-node")
+			dstPath := "/usr/local/bin/vpn-node"
+			log.Printf("[deploy] Copying vpn-node to %s", dstPath)
+			cpCmd := exec.Command("cp", srcPath, dstPath)
+			if output, err := cpCmd.CombinedOutput(); err != nil {
+				log.Printf("[deploy] Warning: failed to copy to /usr/local/bin: %v: %s", err, output)
+			}
+		}
 	}
 
 	// Build vpn CLI if CLI needs rebuild (cli/ui changed, or core changed)
@@ -321,7 +333,7 @@ func (d *Daemon) findGoBinary() string {
 
 // isMacOS returns true if running on macOS.
 func (d *Daemon) isMacOS() bool {
-	return os.Getenv("HOME") != "" && strings.HasPrefix(os.Getenv("HOME"), "/Users/")
+	return runtime.GOOS == "darwin"
 }
 
 // broadcastUpdate sends UPDATE_AVAILABLE to all connected peers.
