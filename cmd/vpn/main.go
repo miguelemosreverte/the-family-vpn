@@ -405,12 +405,46 @@ The dashboard provides:
   - Overview: Node status, peers, bandwidth charts
   - Observability: Splunk-like log viewer and metrics charts
 
+Node selection priority:
+  1. If --node is explicitly set, use that node
+  2. Try local node at 127.0.0.1:9001 first (preferred for client perspective)
+  3. Fall back to VPN server at 95.217.238.72:9001 if local isn't available
+
 Examples:
   vpn ui                           # Start on http://localhost:8080
   vpn ui --listen :3000            # Start on port 3000
   vpn --node 10.8.0.1:9001 ui      # Connect to remote node`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			server := ui.NewServer(nodeAddr, listenAddr)
+			// Determine which node to connect to
+			targetNode := nodeAddr
+
+			// Only do smart detection if --node is still the default value
+			// (the flag is on the root command, so we check value equality)
+			if nodeAddr == "127.0.0.1:9001" {
+				// Try local node first (127.0.0.1:9001)
+				localAddr := "127.0.0.1:9001"
+				client, err := cli.NewClient(localAddr)
+				if err == nil {
+					// Local node is available - use it for client perspective
+					client.Close()
+					targetNode = localAddr
+					fmt.Printf("  Using local node at %s (client perspective)\n", localAddr)
+				} else {
+					// Local not available, try the server
+					serverAddr := "95.217.238.72:9001"
+					client, err = cli.NewClient(serverAddr)
+					if err == nil {
+						client.Close()
+						targetNode = serverAddr
+						fmt.Printf("  No local node found, using server at %s\n", serverAddr)
+					} else {
+						// Neither available - use default and let it fail with proper error
+						fmt.Printf("  Warning: No VPN node found locally or on server\n")
+					}
+				}
+			}
+
+			server := ui.NewServer(targetNode, listenAddr)
 			return server.Start()
 		},
 	}
@@ -925,7 +959,7 @@ Examples:
 	return cmd
 }
 
-const cliVersion = "0.6.0"
+const cliVersion = "0.6.2"
 
 func versionCmd() *cobra.Command {
 	return &cobra.Command{
