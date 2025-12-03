@@ -38,6 +38,7 @@ type StatusResult struct {
 	PeerCount  int           `json:"peer_count"`
 	BytesIn    uint64        `json:"bytes_in"`
 	BytesOut   uint64        `json:"bytes_out"`
+	ServerMode bool          `json:"server_mode"` // True if this is a server node
 }
 
 // PeerInfo represents a connected peer.

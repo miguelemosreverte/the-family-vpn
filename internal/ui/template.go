@@ -1438,8 +1438,10 @@ func init() {
         let currentMetricsRange = '-5m';
         let currentLogRange = '-15m';
         let refreshInterval = null;
-        let vpnRouteAllEnabled = false;
+        let vpnConnected = false;  // Whether tunnel is actually connected
+        let vpnRouteAllEnabled = false;  // Whether route_all is requested
         let vpnToggleLoading = false;
+        let isServerMode = false;  // True if viewing a server node (toggle not applicable)
 
         const HELSINKI_IP = '95.217.238.72';
 
@@ -2136,6 +2138,7 @@ func init() {
         let topologySortBy = 'distance';
         let topologySortAsc = true;
         let currentMapStyle = 'dark';
+        let myVpnAddr = null; // Current node's VPN address (for correct "YOU" detection)
 
         // Map tile layers
         const mapTiles = {
@@ -2158,6 +2161,11 @@ func init() {
         // Load peers/topology page
         async function loadPeers() {
             try {
+                // First, get our own VPN address for correct "YOU" identification
+                const statusRes = await fetch('/api/status');
+                const statusData = await statusRes.json();
+                myVpnAddr = statusData.vpn_address;
+
                 // Check if VPN routing is enabled (this is what the toggle controls)
                 const connRes = await fetch('/api/connection');
                 const connStatus = await connRes.json();
@@ -2170,7 +2178,7 @@ func init() {
                 // If VPN routing is not active, only show ourselves
                 // This is consistent with Overview - only show peers when VPN is ON
                 if (!isVPNActive) {
-                    data.nodes = (data.nodes || []).filter(n => n.is_us);
+                    data.nodes = (data.nodes || []).filter(n => n.vpn_address === myVpnAddr);
                     data.edges = [];
                 }
 
@@ -2194,6 +2202,17 @@ func init() {
         const HELSINKI_VPN_IP = '10.8.0.1';
         // Default Helsinki coordinates if geo not available
         const HELSINKI_DEFAULT = { lat: 60.1699, lon: 24.9384 };
+
+        // Helper to create a location key for grouping nodes
+        function locationKey(lat, lon) {
+            // Round to 2 decimal places (~1km precision) for grouping nearby nodes
+            return ` + "`" + `${lat.toFixed(2)},${lon.toFixed(2)}` + "`" + `;
+        }
+
+        // Helper to check if a node is "us" (the viewing node)
+        function isOurNode(n) {
+            return n.vpn_address === myVpnAddr;
+        }
 
         function renderNetworkMap(data) {
             const container = document.getElementById('network-graph');
@@ -2222,10 +2241,9 @@ func init() {
                 ? [helsinkiNode.geo.lat, helsinkiNode.geo.lon]
                 : [HELSINKI_DEFAULT.lat, HELSINKI_DEFAULT.lon];
 
-            // Add markers for each node
-            const bounds = [];
+            // Group nodes by location for stacking
+            const locationGroups = new Map();
             nodes.forEach(n => {
-                // Get coordinates from geo data, or use defaults
                 let lat, lon;
                 if (n.geo && n.geo.lat && n.geo.lon) {
                     lat = n.geo.lat;
@@ -2234,25 +2252,36 @@ func init() {
                     lat = HELSINKI_DEFAULT.lat;
                     lon = HELSINKI_DEFAULT.lon;
                 } else {
-                    // No geo data available - skip this node on map
-                    return;
+                    return; // No geo data, skip
                 }
 
+                const key = locationKey(lat, lon);
+                if (!locationGroups.has(key)) {
+                    locationGroups.set(key, { lat, lon, nodes: [] });
+                }
+                locationGroups.get(key).nodes.push(n);
+            });
+
+            // Add markers for each location group
+            const bounds = [];
+            locationGroups.forEach((group, key) => {
+                const { lat, lon, nodes: groupNodes } = group;
                 bounds.push([lat, lon]);
 
-                // Determine marker style
-                let color = '#3b82f6'; // Default blue
-                let radius = 8;
-                let zIndex = 100;
+                // Determine marker style based on nodes in group
+                const hasHelsinki = groupNodes.some(n => n.vpn_address === HELSINKI_VPN_IP);
+                const hasUs = groupNodes.some(n => isOurNode(n));
+                const nodeCount = groupNodes.length;
 
-                if (n.vpn_address === HELSINKI_VPN_IP) {
+                let color = '#3b82f6'; // Default blue
+                let radius = 8 + (nodeCount > 1 ? Math.min(nodeCount * 2, 8) : 0); // Bigger for multiple nodes
+
+                if (hasHelsinki) {
                     color = '#22c55e'; // Green for the hub
-                    radius = 12;
-                    zIndex = 200;
-                } else if (n.is_us) {
+                    radius = Math.max(radius, 12);
+                } else if (hasUs) {
                     color = '#8b5cf6'; // Purple for ourselves
-                    radius = 10;
-                    zIndex = 150;
+                    radius = Math.max(radius, 10);
                 }
 
                 // Create circle marker
@@ -2265,32 +2294,55 @@ func init() {
                     fillOpacity: 0.9
                 });
 
-                // Build popup content
-                const location = n.geo ? ` + "`" + `${n.geo.city || ''}, ${n.geo.country || ''}` + "`" + `.replace(/^, |, $/g, '') : 'Unknown';
-                const popupContent = ` + "`" + `
-                    <div class="node-popup">
+                // Build popup content showing all nodes at this location
+                const location = groupNodes[0].geo
+                    ? ` + "`" + `${groupNodes[0].geo.city || ''}, ${groupNodes[0].geo.country || ''}` + "`" + `.replace(/^, |, $/g, '')
+                    : 'Unknown';
+
+                let popupContent = ` + "`" + `<div class="node-popup">` + "`" + `;
+
+                if (nodeCount > 1) {
+                    popupContent += ` + "`" + `<div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                        ${nodeCount} nodes at ${location}
+                    </div>` + "`" + `;
+                }
+
+                // List all nodes at this location
+                groupNodes.forEach((n, idx) => {
+                    const isUs = isOurNode(n);
+                    const isHelsinkiNode = n.vpn_address === HELSINKI_VPN_IP;
+                    const icon = isUs ? '⭐' : (isHelsinkiNode ? '🌐' : '💻');
+                    const youBadge = isUs ? '<span class="you-badge">YOU</span>' : '';
+
+                    if (idx > 0) {
+                        popupContent += ` + "`" + `<div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>` + "`" + `;
+                    }
+
+                    popupContent += ` + "`" + `
                         <div class="node-popup-name">
-                            ${n.is_us ? '⭐' : (n.vpn_address === HELSINKI_VPN_IP ? '🌐' : '💻')}
-                            ${n.name || 'Unknown'}
-                            ${n.is_us ? '<span class="you-badge">YOU</span>' : ''}
+                            ${icon} ${n.name || 'Unknown'} ${youBadge}
                         </div>
                         <div class="node-popup-info">
                             <strong>VPN IP:</strong> ${n.vpn_address || '-'}<br>
-                            <strong>Location:</strong> ${location}<br>
+                            ${nodeCount === 1 ? '<strong>Location:</strong> ' + location + '<br>' : ''}
                             <strong>Distance:</strong> ${n.distance === 0 ? 'Local' : n.distance + ' hop(s)'}<br>
                             ${n.latency_ms ? '<strong>Latency:</strong> ' + n.latency_ms.toFixed(1) + ' ms<br>' : ''}
                             ${n.geo?.isp ? '<strong>ISP:</strong> ' + n.geo.isp + '<br>' : ''}
                         </div>
-                    </div>
-                ` + "`" + `;
+                    ` + "`" + `;
+                });
+
+                popupContent += ` + "`" + `</div>` + "`" + `;
 
                 marker.bindPopup(popupContent);
                 marker.addTo(networkMap);
                 mapMarkers.push(marker);
 
-                // Draw great circle arc to Helsinki hub (if not Helsinki itself)
-                if (n.vpn_address !== HELSINKI_VPN_IP && helsinkiCoords) {
-                    const arc = drawGreatCircleArc([lat, lon], helsinkiCoords, color);
+                // Draw great circle arcs from each node to Helsinki hub (if not at Helsinki)
+                if (!hasHelsinki && helsinkiCoords) {
+                    // Use the most important node's color for the arc
+                    const arcColor = hasUs ? '#8b5cf6' : '#3b82f6';
+                    const arc = drawGreatCircleArc([lat, lon], helsinkiCoords, arcColor);
                     if (arc) {
                         arc.addTo(networkMap);
                         mapArcs.push(arc);
@@ -2416,20 +2468,22 @@ func init() {
             const tbody = document.getElementById('all-peers-tbody');
             if (sorted.length > 0) {
                 tbody.innerHTML = sorted.map(n => {
+                    // Use isOurNode for correct "YOU" identification based on myVpnAddr
+                    const isUs = isOurNode(n);
                     const distanceClass = ` + "`" + `distance-${Math.min(n.distance || 0, 3)}` + "`" + `;
-                    const distanceLabel = n.distance === 0 ? 'You' :
+                    const distanceLabel = isUs ? 'You' :
                                           n.distance === 1 ? '1 hop' :
                                           ` + "`" + `${n.distance} hops` + "`" + `;
-                    const selfBadge = n.is_us ? '<span class="self-indicator">YOU</span>' : '';
-                    const statusColor = n.is_us || n.is_direct ? 'var(--success)' : 'var(--text-secondary)';
-                    const statusText = n.is_us ? 'Local' : (n.is_direct ? 'Direct' : 'Via Relay');
+                    const selfBadge = isUs ? '<span class="self-indicator">YOU</span>' : '';
+                    const statusColor = isUs || n.is_direct ? 'var(--success)' : 'var(--text-secondary)';
+                    const statusText = isUs ? 'Local' : (n.is_direct ? 'Direct' : 'Via Relay');
 
                     return ` + "`" + `
                         <tr>
                             <td><span class="distance-badge ${distanceClass}">${distanceLabel}</span></td>
                             <td>
                                 <div class="peer-name">
-                                    <div class="peer-avatar" style="${n.is_us ? 'background: linear-gradient(135deg, #8b5cf6, #3b82f6)' : ''}">${(n.name || 'U')[0].toUpperCase()}</div>
+                                    <div class="peer-avatar" style="${isUs ? 'background: linear-gradient(135deg, #8b5cf6, #3b82f6)' : ''}">${(n.name || 'U')[0].toUpperCase()}</div>
                                     ${n.name || 'Unknown'}${selfBadge}
                                 </div>
                             </td>
@@ -2558,10 +2612,19 @@ func init() {
         // VPN Toggle functions
         async function loadConnectionStatus() {
             try {
+                // First check if we're viewing a server node
+                const statusRes = await fetch('/api/status');
+                if (statusRes.ok) {
+                    const statusData = await statusRes.json();
+                    isServerMode = statusData.server_mode || false;
+                }
+
                 const res = await fetch('/api/connection');
                 if (!res.ok) throw new Error('Failed to fetch connection status');
                 const status = await res.json();
 
+                // Track both connection and route_all state for truthful UI
+                vpnConnected = status.connected;
                 vpnRouteAllEnabled = status.route_all;
                 updateToggleUI();
 
@@ -2576,6 +2639,22 @@ func init() {
             const toggle = document.getElementById('sidebar-vpn-toggle');
             const statusText = document.getElementById('sidebar-vpn-status');
 
+            // Server mode: toggle is not applicable, disable it
+            if (isServerMode) {
+                toggle.classList.remove('on', 'loading');
+                toggle.classList.add('disabled');
+                toggle.style.opacity = '0.5';
+                toggle.style.cursor = 'not-allowed';
+                statusText.textContent = 'Server mode';
+                statusText.style.color = 'var(--text-secondary)';
+                return;
+            }
+
+            // Client mode: restore normal toggle behavior
+            toggle.classList.remove('disabled');
+            toggle.style.opacity = '1';
+            toggle.style.cursor = 'pointer';
+
             if (vpnToggleLoading) {
                 toggle.classList.add('loading');
                 statusText.textContent = 'Updating...';
@@ -2584,10 +2663,19 @@ func init() {
 
             toggle.classList.remove('loading');
 
-            if (vpnRouteAllEnabled) {
+            // Toggle is "on" only when both connected AND routing through VPN
+            // This ensures UI truth - toggle reflects actual state, not just config
+            const vpnActive = vpnConnected && vpnRouteAllEnabled;
+
+            if (vpnActive) {
                 toggle.classList.add('on');
                 statusText.textContent = 'All traffic through VPN';
                 statusText.style.color = 'var(--success)';
+            } else if (vpnRouteAllEnabled && !vpnConnected) {
+                // route_all is set but not connected - show warning state
+                toggle.classList.remove('on');
+                statusText.textContent = 'Not connected';
+                statusText.style.color = 'var(--warning)';
             } else {
                 toggle.classList.remove('on');
                 statusText.textContent = 'Direct traffic';
@@ -2596,13 +2684,17 @@ func init() {
         }
 
         async function toggleVPN() {
+            // Prevent toggle in server mode - route-all not supported
+            if (isServerMode) return;
             if (vpnToggleLoading) return;
 
             vpnToggleLoading = true;
             updateToggleUI();
 
             try {
-                const action = vpnRouteAllEnabled ? 'disconnect' : 'connect';
+                // Toggle based on current actual state (both connected AND route_all)
+                const currentlyActive = vpnConnected && vpnRouteAllEnabled;
+                const action = currentlyActive ? 'disconnect' : 'connect';
                 const res = await fetch(` + "`" + `/api/connection?action=${action}` + "`" + `, {
                     method: 'POST'
                 });
@@ -2615,6 +2707,7 @@ func init() {
                 const result = await res.json();
 
                 if (result.success && result.status) {
+                    vpnConnected = result.status.connected;
                     vpnRouteAllEnabled = result.status.route_all;
                 } else if (!result.success) {
                     // Show error but don't change state

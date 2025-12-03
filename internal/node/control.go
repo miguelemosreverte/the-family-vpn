@@ -87,6 +87,7 @@ func (d *Daemon) handleStatus(enc *json.Encoder, req *protocol.Request) {
 		PeerCount:  d.PeerCount(),
 		BytesIn:    bytesIn,
 		BytesOut:   bytesOut,
+		ServerMode: d.config.ServerMode,
 	}
 
 	d.sendResult(enc, req.ID, result)
