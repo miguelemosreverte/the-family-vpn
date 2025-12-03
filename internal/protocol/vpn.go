@@ -145,6 +145,10 @@ const (
 
 	// Update signal: "UPDATE_AVAILABLE"
 	CmdUpdateAvailable = "UPDATE_AVAILABLE"
+
+	// Server restart notification: sent to clients before server shuts down
+	// Clients receiving this should expect disconnection and optionally reconnect
+	CmdServerRestarting = "SERVER_RESTARTING"
 )
 
 // GeoLocation represents geographical coordinates and location info.

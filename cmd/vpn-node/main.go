@@ -56,6 +56,10 @@ func main() {
 	routeAll := flag.Bool("route-all", true, "Route all traffic through VPN (client mode, enabled by default)")
 	noRouteAll := flag.Bool("no-route-all", false, "Disable routing all traffic through VPN (direct mode)")
 
+	// Auto-reconnect flag - off by default (development mode)
+	// In production, enable this for resilience when server restarts
+	autoReconnect := flag.Bool("auto-reconnect", false, "Auto-reconnect when connection is lost (off by default for development)")
+
 	flag.Parse()
 
 	// If --no-route-all is explicitly set, override route-all
@@ -108,6 +112,7 @@ func main() {
 		Encryption:    *encryption,
 		EncryptionKey: encryptionKey,
 		RouteAll:      *routeAll,
+		AutoReconnect: *autoReconnect,
 	}
 
 	mode := "CLIENT"

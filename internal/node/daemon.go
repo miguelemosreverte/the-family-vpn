@@ -45,6 +45,11 @@ type Config struct {
 	// RouteAll: if true, route all traffic through VPN (client mode)
 	RouteAll bool `yaml:"route_all"`
 
+	// AutoReconnect: if true, automatically reconnect when connection is lost (client mode)
+	// Default: false (development mode shows connection issues)
+	// In production, set to true for resilience
+	AutoReconnect bool `yaml:"auto_reconnect"`
+
 	// Data directory for SQLite storage
 	DataDir string `yaml:"data_dir"`
 }
@@ -101,6 +106,10 @@ type Daemon struct {
 	// Connection failure detection (client mode)
 	connFailed     chan struct{} // Signals that VPN connection has failed
 	connFailedOnce sync.Once     // Ensures we only signal failure once
+
+	// Server restart notification (client mode)
+	serverRestarting bool       // Set to true when server sends RESTARTING message
+	serverRestartMu  sync.Mutex // Protects serverRestarting
 
 	// Geolocation (looked up before VPN connects)
 	ourGeo      *protocol.GeoLocation // Our geolocation (real, before VPN)
@@ -638,6 +647,23 @@ func (d *Daemon) forwardServerToTUN() {
 				continue
 			}
 
+			// Handle SERVER_RESTARTING from server
+			if cmd == protocol.CmdServerRestarting {
+				log.Printf("[vpn] ========================================")
+				log.Printf("[vpn] SERVER RESTART NOTIFICATION RECEIVED")
+				log.Printf("[vpn] ========================================")
+				log.Printf("[vpn] Server is about to restart")
+				d.serverRestartMu.Lock()
+				d.serverRestarting = true
+				d.serverRestartMu.Unlock()
+				if d.config.AutoReconnect {
+					log.Printf("[vpn] Auto-reconnect enabled - will attempt to reconnect")
+				} else {
+					log.Printf("[vpn] Auto-reconnect disabled - connection will be lost")
+				}
+				continue
+			}
+
 			// Handle PEER_LIST from server
 			if protocol.IsPeerListMessage(cmd) {
 				d.handlePeerListMessage(packet)
@@ -768,6 +794,13 @@ func (d *Daemon) shutdownWithReason(reason string) error {
 
 	d.shutdownOnce.Do(func() {
 		log.Printf("[node] Shutting down (reason: %s)...", reason)
+
+		// IMPORTANT: Notify clients BEFORE cancelling context
+		// This gives them a chance to receive the message
+		if d.config.ServerMode {
+			d.broadcastRestartNotification()
+		}
+
 		d.cancel()
 
 		// CRITICAL: Restore routing FIRST before anything else
@@ -898,6 +931,32 @@ func (d *Daemon) GetPeers() []Peer {
 		peers = append(peers, *p)
 	}
 	return peers
+}
+
+// broadcastRestartNotification sends SERVER_RESTARTING to all connected clients.
+// This should be called before server shutdown to give clients a heads-up.
+func (d *Daemon) broadcastRestartNotification() {
+	if !d.config.ServerMode {
+		return // Only server sends restart notifications
+	}
+
+	msg := protocol.MakeControlMessage(protocol.CmdServerRestarting)
+
+	d.peerConnsMu.RLock()
+	defer d.peerConnsMu.RUnlock()
+
+	log.Printf("[vpn] Broadcasting SERVER_RESTARTING to %d clients", len(d.peerConns))
+
+	for vpnIP, conn := range d.peerConns {
+		if err := conn.WritePacket(msg); err != nil {
+			log.Printf("[vpn] Failed to send restart notification to %s: %v", vpnIP, err)
+		} else {
+			log.Printf("[vpn] Sent restart notification to %s", vpnIP)
+		}
+	}
+
+	// Give clients a moment to process the message
+	time.Sleep(100 * time.Millisecond)
 }
 
 // broadcastPeerList sends the current peer list to all connected clients.
@@ -1084,24 +1143,36 @@ func (d *Daemon) signalConnectionFailure() {
 	})
 }
 
-// monitorConnectionFailure waits for a connection failure and restores routing.
+// monitorConnectionFailure waits for a connection failure and handles reconnection.
 // This ensures that if the VPN connection drops unexpectedly, the user's
 // internet connectivity is restored by removing VPN routes.
+// If auto-reconnect is enabled, it will attempt to reconnect with exponential backoff.
 func (d *Daemon) monitorConnectionFailure() {
 	select {
 	case <-d.ctx.Done():
 		// Normal shutdown - routes will be restored in shutdown()
 		return
 	case <-d.connFailed:
-		// Connection failed unexpectedly
+		// Check if this was an expected server restart
+		d.serverRestartMu.Lock()
+		serverRestarting := d.serverRestarting
+		d.serverRestartMu.Unlock()
+
+		// Connection failed
 		log.Printf("[vpn] ========================================")
-		log.Printf("[vpn] CONNECTION FAILURE DETECTED")
+		if serverRestarting {
+			log.Printf("[vpn] SERVER RESTART - CONNECTION CLOSED")
+		} else {
+			log.Printf("[vpn] CONNECTION FAILURE DETECTED")
+		}
 		log.Printf("[vpn] ========================================")
 		log.Printf("[vpn] VPN connection to server has been lost")
-		log.Printf("[vpn] Restoring network routes to prevent internet loss...")
 
+		// Restore routing first
 		routeRestored := false
+		wasRoutingAll := d.config.RouteAll
 		if d.tun != nil && d.config.RouteAll {
+			log.Printf("[vpn] Restoring network routes to prevent internet loss...")
 			if err := d.tun.RestoreRouting(); err != nil {
 				log.Printf("[vpn] ERROR: Failed to restore routing: %v", err)
 				log.Printf("[vpn] Manual intervention may be required!")
@@ -1117,14 +1188,165 @@ func (d *Daemon) monitorConnectionFailure() {
 		// Record the connection loss event
 		if d.store != nil {
 			uptime := d.Uptime().Seconds()
-			d.store.WriteLifecycleEvent("CONNECTION_LOST", "VPN connection to server lost", uptime, true, routeRestored, Version)
+			reason := "VPN connection to server lost"
+			if serverRestarting {
+				reason = "Server restart notification received"
+			}
+			d.store.WriteLifecycleEvent("CONNECTION_LOST", reason, uptime, wasRoutingAll, routeRestored, Version)
 		}
 
-		log.Printf("[vpn] ========================================")
-		log.Printf("[vpn] VPN is disconnected. Restart vpn-node to reconnect.")
-		log.Printf("[vpn] ========================================")
+		// Check if auto-reconnect is enabled
+		if d.config.AutoReconnect {
+			log.Printf("[vpn] ========================================")
+			log.Printf("[vpn] AUTO-RECONNECT ENABLED")
+			log.Printf("[vpn] ========================================")
+			log.Printf("[vpn] Will attempt to reconnect with exponential backoff...")
+			d.attemptReconnect(wasRoutingAll)
+		} else {
+			log.Printf("[vpn] ========================================")
+			log.Printf("[vpn] VPN is disconnected.")
+			if serverRestarting {
+				log.Printf("[vpn] Server restart detected. Auto-reconnect is disabled.")
+				log.Printf("[vpn] Enable with --auto-reconnect flag for automatic reconnection.")
+			}
+			log.Printf("[vpn] Restart vpn-node to reconnect.")
+			log.Printf("[vpn] ========================================")
 
-		// Trigger daemon shutdown so it exits cleanly
-		d.cancel()
+			// Trigger daemon shutdown so it exits cleanly
+			d.cancel()
+		}
 	}
+}
+
+// attemptReconnect tries to reconnect to the server with exponential backoff.
+// This is only called when auto-reconnect is enabled.
+func (d *Daemon) attemptReconnect(restoreRouteAll bool) {
+	maxRetries := 30 // Try for up to ~5 minutes with exponential backoff
+	baseDelay := time.Second
+	maxDelay := 30 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		select {
+		case <-d.ctx.Done():
+			log.Printf("[vpn] Reconnect cancelled - shutdown requested")
+			return
+		default:
+		}
+
+		// Calculate delay with exponential backoff
+		delay := baseDelay * time.Duration(1<<uint(attempt-1))
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+
+		log.Printf("[vpn] Reconnect attempt %d/%d in %v...", attempt, maxRetries, delay)
+		time.Sleep(delay)
+
+		select {
+		case <-d.ctx.Done():
+			log.Printf("[vpn] Reconnect cancelled - shutdown requested")
+			return
+		default:
+		}
+
+		// Close old connection if it exists
+		if d.vpnConn != nil {
+			d.vpnConn.Close()
+			d.vpnConn = nil
+		}
+
+		// Reset connection failure state for new connection
+		d.connFailed = make(chan struct{})
+		d.connFailedOnce = sync.Once{}
+		d.serverRestartMu.Lock()
+		d.serverRestarting = false
+		d.serverRestartMu.Unlock()
+
+		// Attempt to connect
+		dialCfg := tunnel.DialConfig{
+			Address:    d.config.ConnectTo,
+			UseTLS:     d.config.UseTLS,
+			Key:        d.config.EncryptionKey,
+			Encryption: d.config.Encryption,
+		}
+		conn, err := tunnel.Dial(dialCfg)
+		if err != nil {
+			log.Printf("[vpn] Reconnect failed: %v", err)
+			continue
+		}
+
+		// Send handshake
+		hostname, _ := os.Hostname()
+		peerInfo := protocol.PeerInfo{
+			Hostname: hostname,
+			OS:       "darwin",
+			Version:  Version,
+			Geo:      d.ourGeo,
+			PublicIP: d.ourPublicIP,
+		}
+		if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
+			log.Printf("[vpn] Handshake failed: %v", err)
+			conn.Close()
+			continue
+		}
+
+		// Read assigned IP
+		assignedIP, err := protocol.ReadAssignedIP(conn.NetConn)
+		if err != nil {
+			log.Printf("[vpn] Failed to read assigned IP: %v", err)
+			conn.Close()
+			continue
+		}
+
+		d.vpnConn = conn
+		d.config.VPNAddress = assignedIP
+
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] RECONNECTED SUCCESSFULLY!")
+		log.Printf("[vpn] ========================================")
+		log.Printf("[vpn] Assigned VPN IP: %s", assignedIP)
+
+		// Restore route-all if it was enabled before
+		if restoreRouteAll && d.tun != nil {
+			serverIP := d.config.ConnectTo
+			if host, _, err := net.SplitHostPort(serverIP); err == nil {
+				serverIP = host
+			}
+			if err := d.tun.RouteAllTraffic(serverIP); err != nil {
+				log.Printf("[vpn] Warning: failed to restore route-all: %v", err)
+			} else {
+				d.config.RouteAll = true
+				log.Printf("[vpn] All traffic now routed through VPN")
+			}
+		}
+
+		// Record reconnection success
+		if d.store != nil {
+			d.store.WriteLifecycleEvent("RECONNECTED", fmt.Sprintf("Reconnected after %d attempts", attempt), 0, d.config.RouteAll, false, Version)
+		}
+
+		// Restart packet forwarding goroutines
+		go d.forwardTUNToServer()
+		go d.forwardServerToTUN()
+
+		// Restart connection failure monitor (recursive, but will only run once)
+		go d.monitorConnectionFailure()
+
+		return
+	}
+
+	// All retries exhausted
+	log.Printf("[vpn] ========================================")
+	log.Printf("[vpn] RECONNECT FAILED")
+	log.Printf("[vpn] ========================================")
+	log.Printf("[vpn] All %d reconnect attempts failed", maxRetries)
+	log.Printf("[vpn] Giving up. Restart vpn-node manually to reconnect.")
+
+	// Record failure
+	if d.store != nil {
+		d.store.WriteLifecycleEvent("RECONNECT_FAILED", fmt.Sprintf("Failed after %d attempts", maxRetries), 0, false, false, Version)
+	}
+
+	// Trigger daemon shutdown
+	d.cancel()
 }
