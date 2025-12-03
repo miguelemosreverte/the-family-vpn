@@ -2137,26 +2137,12 @@ func init() {
         let topologyData = { nodes: [], edges: [] };
         let topologySortBy = 'distance';
         let topologySortAsc = true;
-        let currentMapStyle = 'dark';
         let myVpnAddr = null; // Current node's VPN address (for correct "YOU" detection)
 
-        // Map tile layers
-        const mapTiles = {
-            dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-                subdomains: 'abcd',
-                maxZoom: 19
-            }),
-            light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
-                subdomains: 'abcd',
-                maxZoom: 19
-            }),
-            satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-                attribution: '&copy; Esri',
-                maxZoom: 19
-            })
-        };
+        // Map tile layer - standard OpenStreetMap
+        const mapTile = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19
+        });
 
         // Load peers/topology page
         async function loadPeers() {
@@ -2224,9 +2210,9 @@ func init() {
                     center: [45, 10], // Center on Europe initially
                     zoom: 3,
                     zoomControl: true,
-                    attributionControl: true
+                    attributionControl: false
                 });
-                mapTiles.dark.addTo(networkMap);
+                mapTile.addTo(networkMap);
             }
 
             // Clear existing markers and arcs
@@ -2419,21 +2405,6 @@ func init() {
             }
         }
 
-        // Toggle map tile style
-        function toggleMapStyle() {
-            if (!networkMap) return;
-
-            const styles = ['dark', 'light', 'satellite'];
-            const currentIndex = styles.indexOf(currentMapStyle);
-            const nextIndex = (currentIndex + 1) % styles.length;
-            currentMapStyle = styles[nextIndex];
-
-            // Remove current tile layer
-            Object.values(mapTiles).forEach(t => networkMap.removeLayer(t));
-
-            // Add new tile layer
-            mapTiles[currentMapStyle].addTo(networkMap);
-        }
 
         // Render topology table
         function renderTopologyTable(nodes) {
