@@ -316,3 +316,13 @@ func (t *NetworkTopology) SetOurInfo(name, vpnAddr, publicAddr, os, version stri
 		}
 	}
 }
+
+// SetOurGeo updates our own node's geolocation.
+func (t *NetworkTopology) SetOurGeo(geo *protocol.GeoLocation) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if node, ok := t.nodes[t.ourVPNAddr]; ok {
+		node.Geo = geo
+	}
+}

@@ -217,6 +217,10 @@ func (d *Daemon) startServer() error {
 		d.ourPublicIP = ourPublicIP
 		log.Printf("[node] Server location: %s, %s (%.4f, %.4f) - IP: %s",
 			ourGeo.City, ourGeo.Country, ourGeo.Latitude, ourGeo.Longitude, ourPublicIP)
+		// Update topology with our geolocation
+		if d.topology != nil {
+			d.topology.SetOurGeo(ourGeo)
+		}
 	}
 
 	// Create TUN device
@@ -340,6 +344,9 @@ func (d *Daemon) startClient() error {
 
 	// Update topology with ourselves and the server
 	d.topology.SetOurInfo(d.config.NodeName, assignedIP, "", "darwin", Version)
+	if d.ourGeo != nil {
+		d.topology.SetOurGeo(d.ourGeo)
+	}
 
 	// Add server as direct peer
 	// TODO: Server should send its name in the handshake response

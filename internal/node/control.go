@@ -436,6 +436,7 @@ func (d *Daemon) handleTopology(enc *json.Encoder, req *protocol.Request) {
 			BytesIn:     n.BytesIn,
 			BytesOut:    n.BytesOut,
 			Connections: n.Connections,
+			Geo:         n.Geo,
 		}
 	}
 
