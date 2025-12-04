@@ -94,7 +94,7 @@ func (d *Daemon) handleDeploy(w http.ResponseWriter, r *http.Request) {
 
 // performDeploy does the actual deployment work.
 func (d *Daemon) performDeploy(req DeployRequest) {
-	log.Printf("[deploy] Starting deployment on %s", d.config.NodeName)
+	log.Printf("[deploy] Starting deployment on %s (server=%v)", d.config.NodeName, d.config.ServerMode)
 
 	// 1. Git pull
 	if err := d.gitPull(); err != nil {
@@ -115,15 +115,28 @@ func (d *Daemon) performDeploy(req DeployRequest) {
 		log.Printf("[deploy] No rebuilds needed")
 	}
 
-	// 4. Broadcast UPDATE_AVAILABLE to all connected peers
-	d.broadcastUpdate()
+	// 4. Server-only: Broadcast UPDATE_AVAILABLE to all connected peers
+	if d.config.ServerMode {
+		d.broadcastUpdate()
+	}
 
-	// 5. Restart node ONLY if frozen/cold layer changed
+	// 5. Restart logic:
+	// - SERVER: Restart if frozen/cold layer changed (core/websocket)
+	// - CLIENT: NEVER restart automatically. VPN stability is more important.
+	//           Client restarts require manual intervention or the server
+	//           will notify on reconnect if protocol is incompatible.
 	if updates.RestartNode {
-		log.Printf("[deploy] Node restart required (core/websocket changed), scheduling...")
-		// Give peers time to receive the update notification
-		time.Sleep(2 * time.Second)
-		d.scheduleRestart()
+		if d.config.ServerMode {
+			log.Printf("[deploy] Node restart required (core/websocket changed), scheduling...")
+			// Give peers time to receive the update notification
+			time.Sleep(2 * time.Second)
+			d.scheduleRestart()
+		} else {
+			// Client mode: DO NOT restart. Log that a restart would be needed.
+			log.Printf("[deploy] Core/websocket updated but client will NOT restart automatically")
+			log.Printf("[deploy] VPN connection stability prioritized over immediate update")
+			log.Printf("[deploy] Client will get updates on next manual restart or reconnect")
+		}
 	} else if updates.RebuildCLI {
 		log.Printf("[deploy] HOT update complete - CLI/UI rebuilt, VPN connection uninterrupted")
 	}
@@ -158,22 +171,35 @@ func (d *Daemon) checkVersionChanges() VersionUpdates {
 	// Check services/core/VERSION for core node changes
 	coreVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "core", "VERSION"))
 	storedCoreVersion := d.readStoredVersion("core")
-	if coreVersion != storedCoreVersion && coreVersion != "" {
-		log.Printf("[deploy] Core version changed: %s -> %s", storedCoreVersion, coreVersion)
-		updates.RebuildNode = true
-		updates.RebuildCLI = true // CLI depends on some node packages
-		updates.RestartNode = true
-		d.storeVersion("core", coreVersion)
+	if coreVersion != "" {
+		if storedCoreVersion == "" {
+			// First time seeing this version file - just initialize, don't rebuild
+			log.Printf("[deploy] Initializing core version: %s", coreVersion)
+			d.storeVersion("core", coreVersion)
+		} else if coreVersion != storedCoreVersion {
+			// Version actually changed
+			log.Printf("[deploy] Core version changed: %s -> %s", storedCoreVersion, coreVersion)
+			updates.RebuildNode = true
+			updates.RebuildCLI = true // CLI depends on some node packages
+			updates.RestartNode = true
+			d.storeVersion("core", coreVersion)
+		}
 	}
 
 	// Check services/websocket/VERSION for websocket changes
 	wsVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "websocket", "VERSION"))
 	storedWSVersion := d.readStoredVersion("websocket")
-	if wsVersion != storedWSVersion && wsVersion != "" {
-		log.Printf("[deploy] WebSocket version changed: %s -> %s", storedWSVersion, wsVersion)
-		updates.RebuildNode = true
-		updates.RestartNode = true
-		d.storeVersion("websocket", wsVersion)
+	if wsVersion != "" {
+		if storedWSVersion == "" {
+			// First time - initialize
+			log.Printf("[deploy] Initializing websocket version: %s", wsVersion)
+			d.storeVersion("websocket", wsVersion)
+		} else if wsVersion != storedWSVersion {
+			log.Printf("[deploy] WebSocket version changed: %s -> %s", storedWSVersion, wsVersion)
+			updates.RebuildNode = true
+			updates.RestartNode = true
+			d.storeVersion("websocket", wsVersion)
+		}
 	}
 
 	// === HOT layer: cli and ui ===
@@ -182,21 +208,33 @@ func (d *Daemon) checkVersionChanges() VersionUpdates {
 	// Check services/cli/VERSION for CLI changes
 	cliVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "cli", "VERSION"))
 	storedCLIVersion := d.readStoredVersion("cli")
-	if cliVersion != storedCLIVersion && cliVersion != "" {
-		log.Printf("[deploy] CLI version changed: %s -> %s (HOT update, no restart)", storedCLIVersion, cliVersion)
-		updates.RebuildCLI = true
-		// NO RestartNode - this is a hot update!
-		d.storeVersion("cli", cliVersion)
+	if cliVersion != "" {
+		if storedCLIVersion == "" {
+			// First time - initialize
+			log.Printf("[deploy] Initializing CLI version: %s", cliVersion)
+			d.storeVersion("cli", cliVersion)
+		} else if cliVersion != storedCLIVersion {
+			log.Printf("[deploy] CLI version changed: %s -> %s (HOT update, no restart)", storedCLIVersion, cliVersion)
+			updates.RebuildCLI = true
+			// NO RestartNode - this is a hot update!
+			d.storeVersion("cli", cliVersion)
+		}
 	}
 
 	// Check services/ui/VERSION for UI changes
 	uiVersion := d.readVersionFile(filepath.Join(projectRoot, "services", "ui", "VERSION"))
 	storedUIVersion := d.readStoredVersion("ui")
-	if uiVersion != storedUIVersion && uiVersion != "" {
-		log.Printf("[deploy] UI version changed: %s -> %s (HOT update, no restart)", storedUIVersion, uiVersion)
-		updates.RebuildCLI = true // UI is built into CLI binary
-		// NO RestartNode - this is a hot update!
-		d.storeVersion("ui", uiVersion)
+	if uiVersion != "" {
+		if storedUIVersion == "" {
+			// First time - initialize
+			log.Printf("[deploy] Initializing UI version: %s", uiVersion)
+			d.storeVersion("ui", uiVersion)
+		} else if uiVersion != storedUIVersion {
+			log.Printf("[deploy] UI version changed: %s -> %s (HOT update, no restart)", storedUIVersion, uiVersion)
+			updates.RebuildCLI = true // UI is built into CLI binary
+			// NO RestartNode - this is a hot update!
+			d.storeVersion("ui", uiVersion)
+		}
 	}
 
 	// Log summary
