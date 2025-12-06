@@ -48,6 +48,55 @@ print_success() {
     echo -e "${GREEN}✔${NC} $1"
 }
 
+# Clean up existing installation (for reinstalls)
+cleanup_existing() {
+    print_step "Cleaning up existing VPN installation..."
+
+    # Kill all VPN processes first
+    sudo pkill -9 -f "vpn-node" 2>/dev/null || true
+    sudo pkill -9 -f "vpn.*ui" 2>/dev/null || true
+    sleep 2
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # Unload all launchd services
+        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
+        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-ui.plist 2>/dev/null || true
+        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-update.plist 2>/dev/null || true
+        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-health.plist 2>/dev/null || true
+
+        # Remove plist files
+        sudo rm -f /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
+        sudo rm -f /Library/LaunchDaemons/com.family.vpn-ui.plist 2>/dev/null || true
+        sudo rm -f /Library/LaunchDaemons/com.family.vpn-update.plist 2>/dev/null || true
+        sudo rm -f /Library/LaunchDaemons/com.family.vpn-health.plist 2>/dev/null || true
+    else
+        # Stop and disable systemd services
+        sudo systemctl stop vpn-node 2>/dev/null || true
+        sudo systemctl stop vpn-ui 2>/dev/null || true
+        sudo systemctl stop vpn-update.timer 2>/dev/null || true
+        sudo systemctl stop vpn-health.timer 2>/dev/null || true
+        sudo systemctl disable vpn-node 2>/dev/null || true
+        sudo systemctl disable vpn-ui 2>/dev/null || true
+        sudo systemctl disable vpn-update.timer 2>/dev/null || true
+        sudo systemctl disable vpn-health.timer 2>/dev/null || true
+
+        # Remove service files
+        sudo rm -f /etc/systemd/system/vpn-node.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/vpn-ui.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/vpn-update.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/vpn-update.timer 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/vpn-health.service 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/vpn-health.timer 2>/dev/null || true
+        sudo systemctl daemon-reload
+    fi
+
+    # Clear health state file (reset failure counter)
+    sudo rm -f /tmp/vpn-health-state 2>/dev/null || true
+    sudo rm -f /tmp/vpn-update.lock 2>/dev/null || true
+
+    print_success "Cleanup complete"
+}
+
 # Detect OS
 detect_os() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -1038,6 +1087,7 @@ main() {
 
     detect_os
     check_sudo
+    cleanup_existing
     install_git
     install_go
     setup_repository
