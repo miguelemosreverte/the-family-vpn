@@ -72,6 +72,83 @@ check_sudo() {
     fi
 }
 
+# Install Git if not present (macOS uses Xcode Command Line Tools)
+install_git() {
+    if command -v git &> /dev/null; then
+        print_success "Git is already installed: $(git --version | head -1)"
+        return
+    fi
+
+    print_step "Installing Git..."
+
+    if [[ "$OS" == "macos" ]]; then
+        print_step "Installing Xcode Command Line Tools (includes Git)..."
+        print_warning "A dialog may appear asking to install. Click 'Install' and wait."
+        echo ""
+
+        # Trigger the Xcode CLI tools installation
+        # This will show a GUI dialog on macOS
+        xcode-select --install 2>/dev/null || true
+
+        # Wait for the installation to complete
+        print_step "Waiting for Xcode Command Line Tools installation..."
+        print_warning "Please complete the installation dialog if it appeared."
+        echo ""
+
+        # Poll until git becomes available (user completes dialog)
+        local max_wait=600  # 10 minutes max
+        local waited=0
+        while ! command -v git &> /dev/null && [[ $waited -lt $max_wait ]]; do
+            sleep 5
+            waited=$((waited + 5))
+            # Check if xcode-select path is set (means tools are installed)
+            if xcode-select -p &> /dev/null; then
+                break
+            fi
+        done
+
+        # Final check
+        if command -v git &> /dev/null; then
+            print_success "Git installed successfully: $(git --version | head -1)"
+        else
+            print_error "Git installation timed out or failed!"
+            print_error "Please install Xcode Command Line Tools manually:"
+            echo "  xcode-select --install"
+            echo ""
+            echo "Then run this script again."
+            exit 1
+        fi
+
+    elif [[ "$OS" == "linux" ]]; then
+        # Try common package managers
+        if command -v apt-get &> /dev/null; then
+            print_step "Installing Git via apt..."
+            sudo apt-get update
+            sudo apt-get install -y git
+        elif command -v yum &> /dev/null; then
+            print_step "Installing Git via yum..."
+            sudo yum install -y git
+        elif command -v dnf &> /dev/null; then
+            print_step "Installing Git via dnf..."
+            sudo dnf install -y git
+        elif command -v pacman &> /dev/null; then
+            print_step "Installing Git via pacman..."
+            sudo pacman -S --noconfirm git
+        else
+            print_error "Could not detect package manager to install Git!"
+            print_error "Please install Git manually and run this script again."
+            exit 1
+        fi
+
+        if command -v git &> /dev/null; then
+            print_success "Git installed successfully: $(git --version | head -1)"
+        else
+            print_error "Git installation failed!"
+            exit 1
+        fi
+    fi
+}
+
 # Install Go if not present
 install_go() {
     # Check if Go is available in common locations
@@ -640,6 +717,7 @@ main() {
 
     detect_os
     check_sudo
+    install_git
     install_go
     setup_repository
     build_binaries
