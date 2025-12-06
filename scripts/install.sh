@@ -280,6 +280,212 @@ get_node_name() {
     echo "$NODE_NAME"
 }
 
+# Create the network health watchdog script
+create_health_watchdog() {
+    print_step "Creating network health watchdog..."
+
+    cat > "$INSTALL_DIR/scripts/health-watchdog.sh" << 'HEALTHSCRIPT'
+#!/bin/bash
+#
+# VPN Network Health Watchdog
+# This script runs every minute to ensure internet connectivity.
+# If internet fails after VPN starts, it will attempt recovery.
+#
+# Recovery strategy:
+# 1. First 3 failures: Just log and wait
+# 2. After 3 consecutive failures: Restart Wi-Fi/network interface
+# 3. If that doesn't work: Kill VPN and restart network
+#
+
+INSTALL_DIR="$HOME/the-family-vpn"
+LOG_FILE="/var/log/vpn-health.log"
+STATE_FILE="/tmp/vpn-health-state"
+MAX_FAILURES=3
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | sudo tee -a "$LOG_FILE" > /dev/null
+}
+
+# Check if we have internet connectivity
+check_internet() {
+    # Try multiple endpoints to avoid false positives
+    # Use IP addresses to avoid DNS issues
+    local endpoints=(
+        "8.8.8.8"           # Google DNS
+        "1.1.1.1"           # Cloudflare DNS
+        "95.217.238.72"     # Our VPN server
+    )
+
+    for endpoint in "${endpoints[@]}"; do
+        if ping -c 1 -W 3 "$endpoint" &>/dev/null; then
+            return 0
+        fi
+    done
+
+    # Also try a TCP connection as backup (in case ICMP is blocked)
+    if curl -s --connect-timeout 5 --max-time 10 http://clients3.google.com/generate_204 &>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Get current failure count
+get_failure_count() {
+    if [[ -f "$STATE_FILE" ]]; then
+        cat "$STATE_FILE" 2>/dev/null || echo "0"
+    else
+        echo "0"
+    fi
+}
+
+# Set failure count
+set_failure_count() {
+    echo "$1" | sudo tee "$STATE_FILE" > /dev/null
+}
+
+# Restart network interface on macOS
+restart_network_macos() {
+    log "Restarting Wi-Fi on macOS..."
+
+    # Get the Wi-Fi interface name (usually en0)
+    local wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi/{getline; print $2}')
+    if [[ -z "$wifi_interface" ]]; then
+        wifi_interface="en0"
+    fi
+
+    log "Wi-Fi interface: $wifi_interface"
+
+    # Turn Wi-Fi off
+    networksetup -setairportpower "$wifi_interface" off
+    sleep 3
+
+    # Turn Wi-Fi on
+    networksetup -setairportpower "$wifi_interface" on
+    sleep 5
+
+    log "Wi-Fi restart complete"
+}
+
+# Restart network interface on Linux
+restart_network_linux() {
+    log "Restarting network on Linux..."
+
+    # Try NetworkManager first
+    if command -v nmcli &>/dev/null; then
+        log "Using NetworkManager..."
+        nmcli networking off
+        sleep 3
+        nmcli networking on
+        sleep 5
+    # Try systemd-networkd
+    elif systemctl is-active systemd-networkd &>/dev/null; then
+        log "Using systemd-networkd..."
+        sudo systemctl restart systemd-networkd
+        sleep 5
+    # Fallback: restart the default interface
+    else
+        log "Using ifconfig fallback..."
+        local default_iface=$(ip route | grep default | awk '{print $5}' | head -1)
+        if [[ -n "$default_iface" ]]; then
+            sudo ifconfig "$default_iface" down
+            sleep 3
+            sudo ifconfig "$default_iface" up
+            sleep 5
+        fi
+    fi
+
+    log "Network restart complete"
+}
+
+# Kill VPN and restart everything
+nuclear_option() {
+    log "NUCLEAR OPTION: Killing VPN and restarting network..."
+
+    # Kill all VPN processes
+    sudo pkill -9 -f "vpn-node" 2>/dev/null || true
+    sleep 2
+
+    # Restart network
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        restart_network_macos
+    else
+        restart_network_linux
+    fi
+
+    sleep 5
+
+    # Restart VPN service
+    log "Restarting VPN service..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sudo launchctl load /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
+    else
+        sudo systemctl start vpn-node
+    fi
+
+    log "Nuclear recovery complete"
+}
+
+# Main health check
+main() {
+    local failures=$(get_failure_count)
+
+    if check_internet; then
+        # Internet is working
+        if [[ "$failures" -gt 0 ]]; then
+            log "Internet restored after $failures failures"
+        fi
+        set_failure_count 0
+        exit 0
+    fi
+
+    # Internet is down
+    failures=$((failures + 1))
+    set_failure_count "$failures"
+    log "Internet check FAILED (failure #$failures)"
+
+    # Check if VPN is even running
+    if ! pgrep -f "vpn-node" > /dev/null; then
+        log "VPN is not running, skipping network restart (not VPN's fault)"
+        exit 0
+    fi
+
+    if [[ "$failures" -ge "$MAX_FAILURES" ]]; then
+        log "Reached $MAX_FAILURES consecutive failures, attempting recovery..."
+
+        # First try: just restart the network interface
+        if [[ "$failures" -eq "$MAX_FAILURES" ]]; then
+            log "Attempting network interface restart..."
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                restart_network_macos
+            else
+                restart_network_linux
+            fi
+
+            # Check if it worked
+            sleep 5
+            if check_internet; then
+                log "Network restart fixed the issue!"
+                set_failure_count 0
+                exit 0
+            fi
+        fi
+
+        # Second try: nuclear option (kill VPN + restart network)
+        if [[ "$failures" -ge $((MAX_FAILURES + 2)) ]]; then
+            nuclear_option
+            set_failure_count 0
+        fi
+    fi
+}
+
+main "$@"
+HEALTHSCRIPT
+
+    chmod +x "$INSTALL_DIR/scripts/health-watchdog.sh"
+    print_success "Health watchdog created"
+}
+
 # Create the periodic update script (runs every 5 minutes during development)
 create_update_script() {
     print_step "Creating update script..."
@@ -441,6 +647,53 @@ EOF
     print_success "Update job installed (every 5 minutes)"
 }
 
+# Install health watchdog job (macOS) - runs every minute
+install_macos_health_watchdog() {
+    print_step "Installing health watchdog (every 60 seconds)..."
+
+    PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-health.plist"
+
+    sudo tee "$PLIST_PATH" > /dev/null << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.family.vpn-health</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$INSTALL_DIR/scripts/health-watchdog.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/vpn-health.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/vpn-health.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
+EOF
+
+    sudo chown root:wheel "$PLIST_PATH"
+    sudo chmod 644 "$PLIST_PATH"
+
+    # Load the job
+    sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    sudo launchctl load "$PLIST_PATH"
+
+    print_success "Health watchdog installed (checks every 60 seconds)"
+}
+
 # Install update job (Linux) - runs every 5 minutes during development
 install_linux_update_job() {
     print_step "Installing update job (every 5 minutes)..."
@@ -477,6 +730,43 @@ EOF
     sudo systemctl start vpn-update.timer
 
     print_success "Update timer installed (every 5 minutes)"
+}
+
+# Install health watchdog job (Linux) - runs every minute
+install_linux_health_watchdog() {
+    print_step "Installing health watchdog (every 60 seconds)..."
+
+    # Create systemd service
+    sudo tee "/etc/systemd/system/vpn-health.service" > /dev/null << EOF
+[Unit]
+Description=Family VPN Health Watchdog
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $INSTALL_DIR/scripts/health-watchdog.sh
+Environment="HOME=$HOME"
+EOF
+
+    # Create systemd timer (every minute)
+    sudo tee "/etc/systemd/system/vpn-health.timer" > /dev/null << EOF
+[Unit]
+Description=Run VPN Health Watchdog every minute
+
+[Timer]
+OnBootSec=30sec
+OnUnitActiveSec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable vpn-health.timer
+    sudo systemctl start vpn-health.timer
+
+    print_success "Health watchdog installed (checks every 60 seconds)"
 }
 
 # Install launchd service (macOS)
@@ -692,8 +982,13 @@ show_instructions() {
     echo "Server: $VPN_SERVER"
     echo ""
     echo -e "${BLUE}Automatic Updates:${NC}"
-    echo "  The VPN will automatically update every hour"
+    echo "  The VPN will automatically update every 5 minutes"
     echo "  Update logs: sudo cat /var/log/vpn-update.log"
+    echo ""
+    echo -e "${BLUE}Network Health Watchdog:${NC}"
+    echo "  Checks internet connectivity every 60 seconds"
+    echo "  Auto-restarts Wi-Fi after 3 consecutive failures"
+    echo "  Health logs: sudo cat /var/log/vpn-health.log"
     echo ""
     echo -e "${BLUE}Useful commands:${NC}"
     echo "  Check status:    $INSTALL_DIR/bin/vpn status"
@@ -714,7 +1009,7 @@ show_instructions() {
     fi
 
     echo ""
-    echo -e "${GREEN}The VPN will automatically start on boot and update hourly.${NC}"
+    echo -e "${GREEN}The VPN will automatically start on boot, update every 5 min, and self-heal network issues.${NC}"
     echo ""
 }
 
@@ -747,16 +1042,19 @@ main() {
     install_go
     setup_repository
     build_binaries
+    create_health_watchdog
     create_update_script
 
     if [[ "$OS" == "macos" ]]; then
         install_macos_service
         install_macos_ui_service
         install_macos_update_job
+        install_macos_health_watchdog
     else
         install_linux_service
         install_linux_ui_service
         install_linux_update_job
+        install_linux_health_watchdog
     fi
 
     start_vpn
