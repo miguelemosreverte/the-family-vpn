@@ -280,24 +280,32 @@ get_node_name() {
     echo "$NODE_NAME"
 }
 
-# Create the hourly update script
+# Create the periodic update script (runs every 5 minutes during development)
 create_update_script() {
-    print_step "Creating hourly update script..."
+    print_step "Creating update script..."
 
-    cat > "$INSTALL_DIR/scripts/hourly-update.sh" << 'UPDATESCRIPT'
+    cat > "$INSTALL_DIR/scripts/update.sh" << 'UPDATESCRIPT'
 #!/bin/bash
 #
-# Hourly VPN Update Script
-# This script is run every hour to pull updates and restart the VPN if needed.
+# VPN Update Script
+# This script runs every 5 minutes to pull updates and restart the VPN if needed.
 #
 
 INSTALL_DIR="$HOME/the-family-vpn"
 LOG_FILE="/var/log/vpn-update.log"
 LOCK_FILE="/tmp/vpn-update.lock"
 
-# Ensure only one instance runs
-exec 200>"$LOCK_FILE"
-flock -n 200 || exit 0
+# Ensure only one instance runs (use mkdir for portability - flock not on all systems)
+if ! mkdir "$LOCK_FILE" 2>/dev/null; then
+    # Check if lock is stale (older than 5 minutes)
+    if [[ -d "$LOCK_FILE" ]]; then
+        find "$LOCK_FILE" -mmin +5 -exec rm -rf {} \; 2>/dev/null
+        mkdir "$LOCK_FILE" 2>/dev/null || exit 0
+    else
+        exit 0
+    fi
+fi
+trap "rm -rf $LOCK_FILE" EXIT
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | sudo tee -a "$LOG_FILE" > /dev/null
@@ -329,23 +337,32 @@ if [[ "$LOCAL" != "$REMOTE" ]]; then
 
     # Rebuild binaries
     log "Rebuilding binaries..."
-    $GO_CMD build -o bin/vpn-node ./cmd/vpn-node 2>/dev/null
-    $GO_CMD build -o bin/vpn ./cmd/vpn 2>/dev/null
+    $GO_CMD build -o bin/vpn-node ./cmd/vpn-node 2>&1 | sudo tee -a "$LOG_FILE"
+    $GO_CMD build -o bin/vpn ./cmd/vpn 2>&1 | sudo tee -a "$LOG_FILE"
 
-    # Sign on macOS
+    # Sign on macOS (CRITICAL for TUN device access)
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        codesign --sign - --force --deep bin/vpn-node 2>/dev/null
-        codesign --sign - --force --deep bin/vpn 2>/dev/null
+        log "Signing binaries for macOS..."
+        codesign --sign - --force --deep bin/vpn-node 2>&1 | sudo tee -a "$LOG_FILE"
+        codesign --sign - --force --deep bin/vpn 2>&1 | sudo tee -a "$LOG_FILE"
     fi
 
+    # Kill ALL existing vpn-node processes before restart
+    log "Stopping all VPN processes..."
+    sudo pkill -9 -f "vpn-node" 2>/dev/null || true
+    sleep 2
+
     # Restart VPN service
-    log "Restarting VPN service..."
+    log "Starting VPN service..."
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null
+        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
+        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-ui.plist 2>/dev/null || true
         sleep 1
         sudo launchctl load /Library/LaunchDaemons/com.family.vpn-node.plist
+        sudo launchctl load /Library/LaunchDaemons/com.family.vpn-ui.plist 2>/dev/null || true
     else
         sudo systemctl restart vpn-node
+        sudo systemctl restart vpn-ui 2>/dev/null || true
     fi
 
     log "Update complete: $(git log -1 --oneline)"
@@ -353,24 +370,33 @@ else
     log "No updates available"
 fi
 
-# Ensure VPN is running
+# Ensure VPN is running (even if no updates)
 if ! pgrep -f "vpn-node" > /dev/null; then
     log "VPN not running, starting..."
+
+    # Make sure binaries are signed on macOS
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        sudo launchctl load /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null
+        codesign --sign - --force --deep bin/vpn-node 2>/dev/null || true
+        codesign --sign - --force --deep bin/vpn 2>/dev/null || true
+    fi
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sudo launchctl load /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
     else
         sudo systemctl start vpn-node
     fi
 fi
+
+log "Check complete"
 UPDATESCRIPT
 
-    chmod +x "$INSTALL_DIR/scripts/hourly-update.sh"
+    chmod +x "$INSTALL_DIR/scripts/update.sh"
     print_success "Update script created"
 }
 
-# Install hourly update job (macOS)
+# Install update job (macOS) - runs every 5 minutes during development
 install_macos_update_job() {
-    print_step "Installing hourly update job..."
+    print_step "Installing update job (every 5 minutes)..."
 
     PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-update.plist"
 
@@ -384,10 +410,10 @@ install_macos_update_job() {
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>$INSTALL_DIR/scripts/hourly-update.sh</string>
+        <string>$INSTALL_DIR/scripts/update.sh</string>
     </array>
     <key>StartInterval</key>
-    <integer>3600</integer>
+    <integer>300</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
@@ -412,12 +438,12 @@ EOF
     sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
     sudo launchctl load "$PLIST_PATH"
 
-    print_success "Hourly update job installed"
+    print_success "Update job installed (every 5 minutes)"
 }
 
-# Install hourly update job (Linux)
+# Install update job (Linux) - runs every 5 minutes during development
 install_linux_update_job() {
-    print_step "Installing hourly update job..."
+    print_step "Installing update job (every 5 minutes)..."
 
     # Create systemd timer
     sudo tee "/etc/systemd/system/vpn-update.service" > /dev/null << EOF
@@ -428,18 +454,18 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash $INSTALL_DIR/scripts/hourly-update.sh
+ExecStart=/bin/bash $INSTALL_DIR/scripts/update.sh
 Environment="HOME=$HOME"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/go/bin"
 EOF
 
     sudo tee "/etc/systemd/system/vpn-update.timer" > /dev/null << EOF
 [Unit]
-Description=Run VPN Update every hour
+Description=Run VPN Update every 5 minutes
 
 [Timer]
-OnBootSec=5min
-OnUnitActiveSec=1h
+OnBootSec=1min
+OnUnitActiveSec=5min
 Persistent=true
 
 [Install]
@@ -450,7 +476,7 @@ EOF
     sudo systemctl enable vpn-update.timer
     sudo systemctl start vpn-update.timer
 
-    print_success "Hourly update timer installed"
+    print_success "Update timer installed (every 5 minutes)"
 }
 
 # Install launchd service (macOS)
