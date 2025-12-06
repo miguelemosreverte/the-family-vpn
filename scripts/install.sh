@@ -24,13 +24,15 @@ REPO_URL="https://github.com/miguelemosreverte/the-family-vpn.git"
 INSTALL_DIR="$HOME/the-family-vpn"
 GO_VERSION="1.22.0"
 
-# Family password for sudo automation (all family machines use the same password)
-# Can be overridden via environment variable or .env file
-SUDO_PASSWORD="${SUDO_PASSWORD:-osopanda}"
+# Sudo password - MUST be loaded from .env file or environment variable
+# Never hardcode passwords in committed code!
+SUDO_PASSWORD="${SUDO_PASSWORD:-}"
 
-# Load .env file if it exists (from repo root or install dir)
+# Load .env file (required for SUDO_PASSWORD)
 load_env() {
     local env_file=""
+
+    # Check multiple locations for .env
     if [[ -f "$INSTALL_DIR/.env" ]]; then
         env_file="$INSTALL_DIR/.env"
     elif [[ -f "$(dirname "$0")/../.env" ]]; then
@@ -56,6 +58,18 @@ load_env() {
                 SUDO_PASSWORD="$value"
             fi
         done < "$env_file"
+    fi
+
+    # Check if SUDO_PASSWORD is set
+    if [[ -z "$SUDO_PASSWORD" ]]; then
+        print_error "SUDO_PASSWORD not found!"
+        print_error "Please create a .env file with SUDO_PASSWORD=yourpassword"
+        print_error "Or set the SUDO_PASSWORD environment variable"
+        print_error ""
+        print_error "You can fetch the .env from the private gist:"
+        print_error "  gh gist clone b523442d7bec467dbba22a21feab027e"
+        print_error "  cp b523442d7bec467dbba22a21feab027e/.env ."
+        exit 1
     fi
 }
 
