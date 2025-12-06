@@ -24,6 +24,10 @@ REPO_URL="https://github.com/miguelemosreverte/the-family-vpn.git"
 INSTALL_DIR="$HOME/the-family-vpn"
 GO_VERSION="1.22.0"
 
+# Update job configuration
+# Change this value to adjust how often the VPN checks for updates (in seconds)
+UPDATE_INTERVAL_SECONDS=300  # 5 minutes
+
 # Sudo password - MUST be loaded from .env file or environment variable
 # Never hardcode passwords in committed code!
 SUDO_PASSWORD="${SUDO_PASSWORD:-}"
@@ -132,12 +136,14 @@ cleanup_existing() {
         run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-ui.plist || true
         run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-update.plist || true
         run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-health.plist || true
+        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-nosleep.plist || true
 
         # Remove plist files
         run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-node.plist || true
         run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-ui.plist || true
         run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-update.plist || true
         run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-health.plist || true
+        run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-nosleep.plist || true
     else
         # Stop and disable systemd services
         run_sudo systemctl stop vpn-node || true
@@ -520,13 +526,16 @@ UPDATESCRIPT
     print_success "Update script created"
 }
 
-# Install update job (macOS) - runs every 5 minutes during development
+# Install update job (macOS) - idempotent, only reloads if config changed
 install_macos_update_job() {
-    print_step "Installing update job (every 5 minutes)..."
+    local interval_minutes=$((UPDATE_INTERVAL_SECONDS / 60))
+    print_step "Installing update job (every ${interval_minutes} minutes)..."
 
     PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-update.plist"
 
-    sudo tee "$PLIST_PATH" > /dev/null << EOF
+    # Generate the desired plist content
+    local NEW_PLIST
+    NEW_PLIST=$(cat << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -539,7 +548,7 @@ install_macos_update_job() {
         <string>$INSTALL_DIR/scripts/update.sh</string>
     </array>
     <key>StartInterval</key>
-    <integer>300</integer>
+    <integer>$UPDATE_INTERVAL_SECONDS</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
@@ -556,25 +565,42 @@ install_macos_update_job() {
 </dict>
 </plist>
 EOF
+)
 
-    sudo chown root:wheel "$PLIST_PATH"
-    sudo chmod 644 "$PLIST_PATH"
+    # Check if plist exists and compare content
+    local NEEDS_UPDATE=true
+    if [[ -f "$PLIST_PATH" ]]; then
+        local CURRENT_PLIST
+        CURRENT_PLIST=$(sudo cat "$PLIST_PATH" 2>/dev/null)
+        if [[ "$CURRENT_PLIST" == "$NEW_PLIST" ]]; then
+            NEEDS_UPDATE=false
+            print_success "Update job already configured (every ${interval_minutes} minutes) - no changes needed"
+        fi
+    fi
 
-    # Load the job
-    sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
-    sudo launchctl load "$PLIST_PATH"
+    if [[ "$NEEDS_UPDATE" == "true" ]]; then
+        echo "$NEW_PLIST" | sudo tee "$PLIST_PATH" > /dev/null
+        sudo chown root:wheel "$PLIST_PATH"
+        sudo chmod 644 "$PLIST_PATH"
 
-    print_success "Update job installed (every 5 minutes)"
+        # Reload the job only if it changed
+        sudo launchctl bootout system/com.family.vpn-update 2>/dev/null || true
+        sudo launchctl bootstrap system "$PLIST_PATH"
+
+        print_success "Update job installed (every ${interval_minutes} minutes)"
+    fi
 }
 
-# Install health watchdog job (macOS) - runs as continuous process checking every 5 seconds
+# Install health watchdog job (macOS) - idempotent, only reloads if config changed
 install_macos_health_watchdog() {
     print_step "Installing health watchdog (aggressive: 5 second checks)..."
 
     PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-health.plist"
 
+    # Generate the desired plist content
     # The health-watchdog.sh runs as a continuous loop, so we use KeepAlive instead of StartInterval
-    sudo tee "$PLIST_PATH" > /dev/null << EOF
+    local NEW_PLIST
+    NEW_PLIST=$(cat << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -604,23 +630,43 @@ install_macos_health_watchdog() {
 </dict>
 </plist>
 EOF
+)
 
-    sudo chown root:wheel "$PLIST_PATH"
-    sudo chmod 644 "$PLIST_PATH"
+    # Check if plist exists and compare content
+    local NEEDS_UPDATE=true
+    if [[ -f "$PLIST_PATH" ]]; then
+        local CURRENT_PLIST
+        CURRENT_PLIST=$(sudo cat "$PLIST_PATH" 2>/dev/null)
+        if [[ "$CURRENT_PLIST" == "$NEW_PLIST" ]]; then
+            NEEDS_UPDATE=false
+            print_success "Health watchdog already configured - no changes needed"
+        fi
+    fi
 
-    # Load the job
-    sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
-    sudo launchctl load "$PLIST_PATH"
+    if [[ "$NEEDS_UPDATE" == "true" ]]; then
+        echo "$NEW_PLIST" | sudo tee "$PLIST_PATH" > /dev/null
+        sudo chown root:wheel "$PLIST_PATH"
+        sudo chmod 644 "$PLIST_PATH"
 
-    print_success "Health watchdog installed (aggressive: checks every 5 seconds)"
+        # Reload the job only if it changed
+        sudo launchctl bootout system/com.family.vpn-health 2>/dev/null || true
+        sudo launchctl bootstrap system "$PLIST_PATH"
+
+        print_success "Health watchdog installed (aggressive: checks every 5 seconds)"
+    fi
 }
 
-# Install update job (Linux) - runs every 5 minutes during development
+# Install update job (Linux) - idempotent, only reloads if config changed
 install_linux_update_job() {
-    print_step "Installing update job (every 5 minutes)..."
+    local interval_minutes=$((UPDATE_INTERVAL_SECONDS / 60))
+    print_step "Installing update job (every ${interval_minutes} minutes)..."
 
-    # Create systemd timer
-    sudo tee "/etc/systemd/system/vpn-update.service" > /dev/null << EOF
+    SERVICE_PATH="/etc/systemd/system/vpn-update.service"
+    TIMER_PATH="/etc/systemd/system/vpn-update.timer"
+
+    # Generate the desired service content
+    local NEW_SERVICE
+    NEW_SERVICE=$(cat << EOF
 [Unit]
 Description=Family VPN Update Service
 After=network-online.target
@@ -632,33 +678,61 @@ ExecStart=/bin/bash $INSTALL_DIR/scripts/update.sh
 Environment="HOME=$HOME"
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/go/bin"
 EOF
+)
 
-    sudo tee "/etc/systemd/system/vpn-update.timer" > /dev/null << EOF
+    # Generate the desired timer content
+    local NEW_TIMER
+    NEW_TIMER=$(cat << EOF
 [Unit]
-Description=Run VPN Update every 5 minutes
+Description=Run VPN Update every ${interval_minutes} minutes
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=5min
+OnUnitActiveSec=${interval_minutes}min
 Persistent=true
 
 [Install]
 WantedBy=timers.target
 EOF
+)
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable vpn-update.timer
-    sudo systemctl start vpn-update.timer
+    # Check if files exist and compare content
+    local NEEDS_UPDATE=false
+    if [[ -f "$SERVICE_PATH" ]] && [[ -f "$TIMER_PATH" ]]; then
+        local CURRENT_SERVICE
+        local CURRENT_TIMER
+        CURRENT_SERVICE=$(sudo cat "$SERVICE_PATH" 2>/dev/null)
+        CURRENT_TIMER=$(sudo cat "$TIMER_PATH" 2>/dev/null)
+        if [[ "$CURRENT_SERVICE" != "$NEW_SERVICE" ]] || [[ "$CURRENT_TIMER" != "$NEW_TIMER" ]]; then
+            NEEDS_UPDATE=true
+        fi
+    else
+        NEEDS_UPDATE=true
+    fi
 
-    print_success "Update timer installed (every 5 minutes)"
+    if [[ "$NEEDS_UPDATE" == "true" ]]; then
+        echo "$NEW_SERVICE" | sudo tee "$SERVICE_PATH" > /dev/null
+        echo "$NEW_TIMER" | sudo tee "$TIMER_PATH" > /dev/null
+
+        sudo systemctl daemon-reload
+        sudo systemctl enable vpn-update.timer
+        sudo systemctl restart vpn-update.timer
+
+        print_success "Update timer installed (every ${interval_minutes} minutes)"
+    else
+        print_success "Update timer already configured (every ${interval_minutes} minutes) - no changes needed"
+    fi
 }
 
-# Install health watchdog job (Linux) - runs as continuous process checking every 5 seconds
+# Install health watchdog job (Linux) - idempotent, only reloads if config changed
 install_linux_health_watchdog() {
     print_step "Installing health watchdog (aggressive: 5 second checks)..."
 
-    # Create systemd service (runs continuously, not as oneshot)
-    sudo tee "/etc/systemd/system/vpn-health.service" > /dev/null << EOF
+    SERVICE_PATH="/etc/systemd/system/vpn-health.service"
+
+    # Generate the desired service content
+    local NEW_SERVICE
+    NEW_SERVICE=$(cat << EOF
 [Unit]
 Description=Family VPN Health Watchdog (Aggressive)
 After=network-online.target
@@ -673,17 +747,97 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+)
 
-    # Remove old timer if it exists
-    sudo systemctl stop vpn-health.timer 2>/dev/null || true
-    sudo systemctl disable vpn-health.timer 2>/dev/null || true
-    sudo rm -f /etc/systemd/system/vpn-health.timer
+    # Check if file exists and compare content
+    local NEEDS_UPDATE=false
+    if [[ -f "$SERVICE_PATH" ]]; then
+        local CURRENT_SERVICE
+        CURRENT_SERVICE=$(sudo cat "$SERVICE_PATH" 2>/dev/null)
+        if [[ "$CURRENT_SERVICE" != "$NEW_SERVICE" ]]; then
+            NEEDS_UPDATE=true
+        fi
+    else
+        NEEDS_UPDATE=true
+    fi
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable vpn-health.service
-    sudo systemctl start vpn-health.service
+    # Always clean up old timer if it exists (legacy)
+    if systemctl is-active vpn-health.timer &>/dev/null || [[ -f /etc/systemd/system/vpn-health.timer ]]; then
+        sudo systemctl stop vpn-health.timer 2>/dev/null || true
+        sudo systemctl disable vpn-health.timer 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/vpn-health.timer
+        NEEDS_UPDATE=true  # Force reload after timer cleanup
+    fi
 
-    print_success "Health watchdog installed (aggressive: checks every 5 seconds)"
+    if [[ "$NEEDS_UPDATE" == "true" ]]; then
+        echo "$NEW_SERVICE" | sudo tee "$SERVICE_PATH" > /dev/null
+
+        sudo systemctl daemon-reload
+        sudo systemctl enable vpn-health.service
+        sudo systemctl restart vpn-health.service
+
+        print_success "Health watchdog installed (aggressive: checks every 5 seconds)"
+    else
+        print_success "Health watchdog already configured - no changes needed"
+    fi
+}
+
+# Configure sleep prevention (macOS) - keeps computer awake for VPN
+configure_macos_sleep_prevention() {
+    print_step "Configuring sleep prevention (keeps computer awake for VPN)..."
+
+    PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-nosleep.plist"
+
+    # Generate the desired plist content
+    # caffeinate -s prevents system sleep indefinitely (runs forever with -i -d -s)
+    # -i: prevent idle sleep
+    # -d: prevent display sleep (optional, remove if you want display to sleep)
+    # -s: prevent system sleep when on AC power
+    local NEW_PLIST
+    NEW_PLIST=$(cat << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.family.vpn-nosleep</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>-s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+)
+
+    # Check if plist exists and compare content
+    local NEEDS_UPDATE=true
+    if [[ -f "$PLIST_PATH" ]]; then
+        local CURRENT_PLIST
+        CURRENT_PLIST=$(sudo cat "$PLIST_PATH" 2>/dev/null)
+        if [[ "$CURRENT_PLIST" == "$NEW_PLIST" ]]; then
+            NEEDS_UPDATE=false
+            print_success "Sleep prevention already configured - no changes needed"
+        fi
+    fi
+
+    if [[ "$NEEDS_UPDATE" == "true" ]]; then
+        echo "$NEW_PLIST" | sudo tee "$PLIST_PATH" > /dev/null
+        sudo chown root:wheel "$PLIST_PATH"
+        sudo chmod 644 "$PLIST_PATH"
+
+        # Reload the job only if it changed
+        sudo launchctl bootout system/com.family.vpn-nosleep 2>/dev/null || true
+        sudo launchctl bootstrap system "$PLIST_PATH"
+
+        print_success "Sleep prevention installed (computer will stay awake)"
+    fi
 }
 
 # Install launchd service (macOS)
@@ -908,6 +1062,12 @@ show_instructions() {
     echo "  Kills VPN + restarts Wi-Fi after 3 failures (15 sec)"
     echo "  Health logs: sudo cat /var/log/vpn-health.log"
     echo ""
+    if [[ "$OS" == "macos" ]]; then
+        echo -e "${BLUE}Sleep Prevention (macOS):${NC}"
+        echo "  Computer will stay awake to maintain VPN connection"
+        echo "  Display may still sleep, but system won't"
+        echo ""
+    fi
     echo -e "${BLUE}Useful commands:${NC}"
     echo "  Check status:    $INSTALL_DIR/bin/vpn status"
     echo "  View peers:      $INSTALL_DIR/bin/vpn peers"
@@ -970,6 +1130,7 @@ main() {
         install_macos_ui_service
         install_macos_update_job
         install_macos_health_watchdog
+        configure_macos_sleep_prevention
     else
         install_linux_service
         install_linux_ui_service
