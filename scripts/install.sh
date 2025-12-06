@@ -1171,8 +1171,10 @@ send_handshake() {
     # Wait a moment for VPN to be fully connected
     sleep 2
 
-    # Send handshake via CLI (runs tests and sends to server)
-    if ./bin/vpn handshake --version "$GIT_VERSION" 2>/dev/null; then
+    # Send handshake directly to server via VPN tunnel (10.8.0.1:9001 is the server's control port)
+    # This ensures handshakes are stored centrally on the server, not on the local client
+    # We pass --name explicitly to identify the client, since connecting to server gets server's status
+    if ./bin/vpn handshake --version "$GIT_VERSION" --name "$NODE_NAME" --node 10.8.0.1:9001 2>/dev/null; then
         print_success "Handshake sent successfully"
     else
         print_warning "Handshake may have failed (server might record it anyway)"
