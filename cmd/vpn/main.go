@@ -1435,7 +1435,7 @@ func handshakesCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&nodeName, "node", "", "Filter by node name")
+	cmd.Flags().StringVar(&nodeName, "filter-node", "", "Filter by node name")
 	cmd.Flags().IntVar(&limit, "limit", 50, "Maximum number of entries")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 
