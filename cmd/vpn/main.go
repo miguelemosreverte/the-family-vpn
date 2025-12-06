@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -64,6 +65,8 @@ Use --node to connect to a remote node.`,
 	rootCmd.AddCommand(versionCmd())
 	rootCmd.AddCommand(crashesCmd())
 	rootCmd.AddCommand(lifecycleCmd())
+	rootCmd.AddCommand(handshakeCmd())
+	rootCmd.AddCommand(handshakesCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -1243,3 +1246,225 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-3] + "..."
 }
+
+// handshakeCmd sends an install handshake to the server.
+func handshakeCmd() *cobra.Command {
+	var (
+		nodeName string
+		version  string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "handshake",
+		Short: "Send install handshake to server",
+		Long: `Send an install handshake to the VPN server.
+
+This command is typically called by install.sh after installation
+to register the client with the server and test connectivity.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			// Get hostname
+			hostname, _ := os.Hostname()
+
+			// Get status for VPN address
+			status, err := client.Status()
+			if err != nil {
+				return fmt.Errorf("failed to get status: %w", err)
+			}
+
+			if nodeName == "" {
+				nodeName = status.NodeName
+			}
+			if version == "" {
+				version = status.Version
+			}
+
+			// Try to get public IP
+			publicIP, _ := getPublicIP()
+
+			// Run ping test to server
+			pingOK := false
+			pingMS := 0
+			if pingOut, err := exec.Command("ping", "-c", "1", "-W", "2", "10.8.0.1").Output(); err == nil {
+				pingOK = true
+				// Extract time from ping output
+				if strings.Contains(string(pingOut), "time=") {
+					parts := strings.Split(string(pingOut), "time=")
+					if len(parts) > 1 {
+						timePart := strings.Split(parts[1], " ")[0]
+						var ms float64
+						fmt.Sscanf(timePart, "%f", &ms)
+						pingMS = int(ms)
+					}
+				}
+			}
+
+			// Run SSH test - try to connect to server port 22
+			sshOK := false
+			sshErr := ""
+			conn, err := dialWithTimeout("tcp", "10.8.0.1:22", 3*time.Second)
+			if err != nil {
+				sshErr = err.Error()
+			} else {
+				sshOK = true
+				conn.Close()
+			}
+
+			handshake := protocol.InstallHandshake{
+				NodeName:     nodeName,
+				VPNAddress:   status.VPNAddress,
+				PublicIP:     publicIP,
+				Hostname:     hostname,
+				OS:           runtime.GOOS,
+				Arch:         runtime.GOARCH,
+				Version:      version,
+				GoVersion:    runtime.Version(),
+				InstallTS:    time.Now().Format(time.RFC3339),
+				SSHTestOK:    sshOK,
+				SSHTestError: sshErr,
+				PingTestOK:   pingOK,
+				PingTestMS:   pingMS,
+			}
+
+			result, err := client.SendHandshake(handshake)
+			if err != nil {
+				return err
+			}
+
+			if result.Success {
+				fmt.Printf("%s Handshake Sent%s\n", colorGreen, colorReset)
+				fmt.Println("────────────────────────────────────────")
+				fmt.Printf("  Node:     %s\n", handshake.NodeName)
+				fmt.Printf("  VPN IP:   %s\n", handshake.VPNAddress)
+				fmt.Printf("  Version:  %s\n", handshake.Version)
+				fmt.Printf("  Ping:     %v (%d ms)\n", handshake.PingTestOK, handshake.PingTestMS)
+				fmt.Printf("  SSH:      %v\n", handshake.SSHTestOK)
+				fmt.Printf("  Recorded: %v\n", result.Recorded)
+				fmt.Printf("  Server:   %s\n", result.ServerVer)
+			} else {
+				fmt.Printf("%s Handshake Failed%s\n", colorRed, colorReset)
+				fmt.Println(result.Message)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&nodeName, "name", "", "Node name (default: from status)")
+	cmd.Flags().StringVar(&version, "version", "", "Version string (default: from status)")
+
+	return cmd
+}
+
+// handshakesCmd shows handshake history.
+func handshakesCmd() *cobra.Command {
+	var (
+		nodeName   string
+		limit      int
+		outputJSON bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "handshakes",
+		Short: "Show install handshake history",
+		Long:  `Show the history of install handshakes from all clients.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := cli.NewClient(nodeAddr)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+
+			history, err := client.HandshakeHistory(nodeName, limit)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(history)
+			}
+
+			if len(history.Entries) == 0 {
+				fmt.Println("No handshakes recorded yet.")
+				return nil
+			}
+
+			fmt.Printf("Install Handshakes (%d total)\n", history.Total)
+			fmt.Println("────────────────────────────────────────────────────────────────────────────")
+			fmt.Printf("%-20s %-15s %-12s %-10s %-8s %-4s %-4s\n",
+				"TIMESTAMP", "NODE", "VPN IP", "VERSION", "OS", "PING", "SSH")
+			fmt.Println("────────────────────────────────────────────────────────────────────────────")
+
+			for _, h := range history.Entries {
+				ts, _ := time.Parse(time.RFC3339, h.Timestamp)
+				tsStr := ts.Local().Format("2006-01-02 15:04")
+
+				pingStr := colorRed + "FAIL" + colorReset
+				if h.PingTestOK {
+					pingStr = colorGreen + fmt.Sprintf("%dms", h.PingTestMS) + colorReset
+				}
+
+				sshStr := colorRed + "FAIL" + colorReset
+				if h.SSHTestOK {
+					sshStr = colorGreen + "OK" + colorReset
+				}
+
+				ver := h.Version
+				if len(ver) > 7 {
+					ver = ver[:7]
+				}
+
+				fmt.Printf("%-20s %-15s %-12s %-10s %-8s %-4s %-4s\n",
+					tsStr,
+					truncate(h.NodeName, 15),
+					h.VPNAddress,
+					ver,
+					h.OS+"/"+h.Arch,
+					pingStr,
+					sshStr)
+			}
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&nodeName, "node", "", "Filter by node name")
+	cmd.Flags().IntVar(&limit, "limit", 50, "Maximum number of entries")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+
+	return cmd
+}
+
+func dialWithTimeout(network, addr string, timeout time.Duration) (interface{ Close() error }, error) {
+	done := make(chan error, 1)
+	go func() {
+		c, err := exec.Command("nc", "-z", "-w", "3", strings.Split(addr, ":")[0], strings.Split(addr, ":")[1]).CombinedOutput()
+		if err != nil && !strings.Contains(string(c), "succeeded") {
+			done <- fmt.Errorf("connection failed")
+		} else {
+			done <- nil
+		}
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+		// Return a dummy closer
+		return &dummyCloser{}, nil
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("connection timeout")
+	}
+}
+
+type dummyCloser struct{}
+
+func (d *dummyCloser) Close() error { return nil }

@@ -67,6 +67,10 @@ func (d *Daemon) handleRequest(enc *json.Encoder, req *protocol.Request) {
 		d.handleLifecycle(enc, req)
 	case "crash_stats":
 		d.handleCrashStats(enc, req)
+	case "handshake":
+		d.handleHandshake(enc, req)
+	case "handshake_history":
+		d.handleHandshakeHistory(enc, req)
 	default:
 		d.sendError(enc, req.ID, protocol.ErrCodeInvalidMethod,
 			fmt.Sprintf("unknown method: %s", req.Method))
@@ -613,4 +617,92 @@ func (d *Daemon) handleCrashStats(enc *json.Encoder, req *protocol.Request) {
 	}
 
 	d.sendResult(enc, req.ID, result)
+}
+
+// handleHandshake records an install handshake from a client.
+func (d *Daemon) handleHandshake(enc *json.Encoder, req *protocol.Request) {
+	var params protocol.InstallHandshakeParams
+	if req.Params != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			d.sendError(enc, req.ID, protocol.ErrCodeInvalidParams, "invalid params")
+			return
+		}
+	}
+
+	h := params.Handshake
+	log.Printf("[control] Received handshake from %s (version=%s, os=%s/%s)", h.NodeName, h.Version, h.OS, h.Arch)
+
+	// Only store if we have a storage backend (server mode)
+	recorded := false
+	if d.store != nil {
+		err := d.store.WriteHandshake(
+			h.NodeName, h.VPNAddress, h.PublicIP, h.Hostname,
+			h.OS, h.Arch, h.Version, h.GoVersion, h.InstallTS,
+			h.SSHTestOK, h.SSHTestError, h.PingTestOK, h.PingTestMS,
+		)
+		if err != nil {
+			log.Printf("[control] Failed to store handshake: %v", err)
+		} else {
+			recorded = true
+			log.Printf("[control] Handshake recorded for %s", h.NodeName)
+		}
+	}
+
+	d.sendResult(enc, req.ID, protocol.InstallHandshakeResult{
+		Success:   true,
+		Message:   fmt.Sprintf("Welcome %s! Handshake received.", h.NodeName),
+		Recorded:  recorded,
+		ServerVer: Version,
+	})
+}
+
+// handleHandshakeHistory returns the history of install handshakes.
+func (d *Daemon) handleHandshakeHistory(enc *json.Encoder, req *protocol.Request) {
+	if d.store == nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, "storage not initialized")
+		return
+	}
+
+	var params protocol.HandshakeHistoryParams
+	if req.Params != nil {
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			d.sendError(enc, req.ID, protocol.ErrCodeInvalidParams, "invalid params")
+			return
+		}
+	}
+
+	if params.Limit <= 0 {
+		params.Limit = 100
+	}
+
+	records, total, err := d.store.GetHandshakeHistory(params.NodeName, params.Limit)
+	if err != nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, fmt.Sprintf("query failed: %v", err))
+		return
+	}
+
+	// Convert to protocol format
+	entries := make([]protocol.HandshakeEntry, len(records))
+	for i, r := range records {
+		entries[i] = protocol.HandshakeEntry{
+			ID:         r.ID,
+			Timestamp:  r.Timestamp.Format(time.RFC3339),
+			NodeName:   r.NodeName,
+			VPNAddress: r.VPNAddress,
+			PublicIP:   r.PublicIP,
+			Hostname:   r.Hostname,
+			OS:         r.OS,
+			Arch:       r.Arch,
+			Version:    r.Version,
+			GoVersion:  r.GoVersion,
+			SSHTestOK:  r.SSHTestOK,
+			PingTestOK: r.PingTestOK,
+			PingTestMS: r.PingTestMS,
+		}
+	}
+
+	d.sendResult(enc, req.ID, protocol.HandshakeHistoryResult{
+		Entries: entries,
+		Total:   total,
+	})
 }

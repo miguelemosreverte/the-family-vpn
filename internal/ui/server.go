@@ -59,6 +59,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/topology", s.handleTopology)
 	mux.HandleFunc("/api/network_peers", s.handleNetworkPeers)
 	mux.HandleFunc("/api/vnc-config", s.handleVNCConfig)
+	mux.HandleFunc("/api/handshakes", s.handleHandshakes)
 
 	// WebSocket terminal
 	mux.HandleFunc("/ws/terminal", s.handleTerminal)
@@ -345,6 +346,28 @@ func (s *Server) handleVNCConfig(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"password": password,
 	})
+}
+
+// handleHandshakes returns the history of install handshakes from all clients.
+func (s *Server) handleHandshakes(w http.ResponseWriter, r *http.Request) {
+	client, err := s.getClient()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer client.Close()
+
+	nodeName := r.URL.Query().Get("node")
+	limit := 100
+
+	history, err := client.HandshakeHistory(nodeName, limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
 }
 
 // Placeholder for compile - will be replaced with actual HTML

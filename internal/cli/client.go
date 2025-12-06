@@ -320,3 +320,48 @@ func (c *Client) CrashStats(since string) (*protocol.CrashStatsResult, error) {
 
 	return &result, nil
 }
+
+// SendHandshake sends an install handshake to the server.
+func (c *Client) SendHandshake(handshake protocol.InstallHandshake) (*protocol.InstallHandshakeResult, error) {
+	params := protocol.InstallHandshakeParams{Handshake: handshake}
+
+	resp, err := c.call("handshake", params)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("server error: %s", resp.Error.Message)
+	}
+
+	var result protocol.InstallHandshakeResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+// HandshakeHistory retrieves the history of install handshakes.
+func (c *Client) HandshakeHistory(nodeName string, limit int) (*protocol.HandshakeHistoryResult, error) {
+	params := protocol.HandshakeHistoryParams{
+		NodeName: nodeName,
+		Limit:    limit,
+	}
+
+	resp, err := c.call("handshake_history", params)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Error != nil {
+		return nil, fmt.Errorf("server error: %s", resp.Error.Message)
+	}
+
+	var result protocol.HandshakeHistoryResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}

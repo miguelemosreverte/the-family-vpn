@@ -225,6 +225,67 @@ type CrashStatsResult struct {
 	LastCrash           *LifecycleEvent  `json:"last_crash,omitempty"`
 }
 
+// InstallHandshake represents a handshake sent after install.sh runs.
+// This is sent from clients to the server to track installation history.
+type InstallHandshake struct {
+	NodeName   string `json:"node_name"`
+	VPNAddress string `json:"vpn_address,omitempty"`
+	PublicIP   string `json:"public_ip,omitempty"`
+	Hostname   string `json:"hostname"`
+	OS         string `json:"os"`
+	Arch       string `json:"arch"`
+	Version    string `json:"version"`    // Git commit hash
+	GoVersion  string `json:"go_version"` // Go version used to build
+	InstallTS  string `json:"install_ts"` // When install.sh ran
+	// Test results
+	SSHTestOK    bool   `json:"ssh_test_ok"`
+	SSHTestError string `json:"ssh_test_error,omitempty"`
+	PingTestOK   bool   `json:"ping_test_ok"`
+	PingTestMS   int    `json:"ping_test_ms,omitempty"`
+}
+
+// InstallHandshakeParams are parameters for the "handshake" method.
+type InstallHandshakeParams struct {
+	Handshake InstallHandshake `json:"handshake"`
+}
+
+// InstallHandshakeResult is returned by the "handshake" method.
+type InstallHandshakeResult struct {
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	Recorded  bool   `json:"recorded"` // True if stored on server
+	ServerVer string `json:"server_version,omitempty"`
+}
+
+// HandshakeHistoryParams are parameters for the "handshake_history" method.
+type HandshakeHistoryParams struct {
+	NodeName string `json:"node_name,omitempty"` // Filter by node name
+	Limit    int    `json:"limit,omitempty"`     // Max results
+}
+
+// HandshakeEntry represents a recorded handshake in history.
+type HandshakeEntry struct {
+	ID         int64  `json:"id"`
+	Timestamp  string `json:"timestamp"`
+	NodeName   string `json:"node_name"`
+	VPNAddress string `json:"vpn_address"`
+	PublicIP   string `json:"public_ip"`
+	Hostname   string `json:"hostname"`
+	OS         string `json:"os"`
+	Arch       string `json:"arch"`
+	Version    string `json:"version"`
+	GoVersion  string `json:"go_version"`
+	SSHTestOK  bool   `json:"ssh_test_ok"`
+	PingTestOK bool   `json:"ping_test_ok"`
+	PingTestMS int    `json:"ping_test_ms"`
+}
+
+// HandshakeHistoryResult is returned by the "handshake_history" method.
+type HandshakeHistoryResult struct {
+	Entries []HandshakeEntry `json:"entries"`
+	Total   int              `json:"total"`
+}
+
 // Common error codes.
 const (
 	ErrCodeInvalidMethod = -32601

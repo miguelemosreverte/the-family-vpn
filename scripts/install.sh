@@ -1159,6 +1159,26 @@ open_browser() {
     print_success "Dashboard available at http://localhost:8080"
 }
 
+# Send install handshake to server
+send_handshake() {
+    print_step "Sending install handshake to server..."
+
+    cd "$INSTALL_DIR"
+
+    # Get git commit hash for version
+    GIT_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+
+    # Wait a moment for VPN to be fully connected
+    sleep 2
+
+    # Send handshake via CLI (runs tests and sends to server)
+    if ./bin/vpn handshake --version "$GIT_VERSION" 2>/dev/null; then
+        print_success "Handshake sent successfully"
+    else
+        print_warning "Handshake may have failed (server might record it anyway)"
+    fi
+}
+
 # Main installation flow
 main() {
     print_header "Family VPN Client Installer"
@@ -1192,6 +1212,7 @@ main() {
 
     start_vpn
     verify_connection
+    send_handshake
     show_instructions
     open_browser
 }

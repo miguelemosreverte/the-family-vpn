@@ -165,6 +165,27 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_lifecycle_timestamp ON lifecycle(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_lifecycle_event ON lifecycle(event);
+
+	-- Install handshakes (tracked per client install)
+	CREATE TABLE IF NOT EXISTS handshakes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp INTEGER NOT NULL,    -- When the handshake was received
+		node_name TEXT NOT NULL,       -- Client node name
+		vpn_address TEXT,              -- VPN IP assigned
+		public_ip TEXT,                -- Client's public IP
+		hostname TEXT,                 -- Client's hostname
+		os TEXT,                       -- Operating system (darwin, linux)
+		arch TEXT,                     -- Architecture (amd64, arm64)
+		version TEXT,                  -- Git commit hash
+		go_version TEXT,               -- Go version used to build
+		install_ts TEXT,               -- When install.sh ran
+		ssh_test_ok INTEGER,           -- SSH test passed (1/0)
+		ssh_test_error TEXT,           -- SSH test error message
+		ping_test_ok INTEGER,          -- Ping test passed (1/0)
+		ping_test_ms INTEGER           -- Ping latency in ms
+	);
+	CREATE INDEX IF NOT EXISTS idx_handshakes_timestamp ON handshakes(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_handshakes_node_name ON handshakes(node_name);
 	`
 	_, err := s.db.Exec(schema)
 	return err
@@ -556,4 +577,120 @@ func (s *Store) GetStorageStats() (map[string]interface{}, error) {
 	stats["metrics_1h_count"] = count
 
 	return stats, nil
+}
+
+// HandshakeRecord represents a stored install handshake.
+type HandshakeRecord struct {
+	ID           int64     `json:"id"`
+	Timestamp    time.Time `json:"timestamp"`
+	NodeName     string    `json:"node_name"`
+	VPNAddress   string    `json:"vpn_address"`
+	PublicIP     string    `json:"public_ip"`
+	Hostname     string    `json:"hostname"`
+	OS           string    `json:"os"`
+	Arch         string    `json:"arch"`
+	Version      string    `json:"version"`
+	GoVersion    string    `json:"go_version"`
+	InstallTS    string    `json:"install_ts"`
+	SSHTestOK    bool      `json:"ssh_test_ok"`
+	SSHTestError string    `json:"ssh_test_error"`
+	PingTestOK   bool      `json:"ping_test_ok"`
+	PingTestMS   int       `json:"ping_test_ms"`
+}
+
+// WriteHandshake records an install handshake from a client.
+func (s *Store) WriteHandshake(nodeName, vpnAddress, publicIP, hostname, osName, arch, version, goVersion, installTS string, sshTestOK bool, sshTestError string, pingTestOK bool, pingTestMS int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sshOK := 0
+	if sshTestOK {
+		sshOK = 1
+	}
+	pingOK := 0
+	if pingTestOK {
+		pingOK = 1
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO handshakes (timestamp, node_name, vpn_address, public_ip, hostname, os, arch, version, go_version, install_ts, ssh_test_ok, ssh_test_error, ping_test_ok, ping_test_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().UnixMilli(), nodeName, vpnAddress, publicIP, hostname, osName, arch, version, goVersion, installTS, sshOK, sshTestError, pingOK, pingTestMS,
+	)
+	return err
+}
+
+// GetHandshakeHistory returns handshake history, optionally filtered by node name.
+func (s *Store) GetHandshakeHistory(nodeName string, limit int) ([]HandshakeRecord, int, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var query string
+	var args []interface{}
+
+	if nodeName != "" {
+		query = `
+			SELECT id, timestamp, node_name, vpn_address, public_ip, hostname, os, arch, version, go_version, install_ts, ssh_test_ok, ssh_test_error, ping_test_ok, ping_test_ms
+			FROM handshakes
+			WHERE node_name = ?
+			ORDER BY timestamp DESC
+			LIMIT ?`
+		args = []interface{}{nodeName, limit}
+	} else {
+		query = `
+			SELECT id, timestamp, node_name, vpn_address, public_ip, hostname, os, arch, version, go_version, install_ts, ssh_test_ok, ssh_test_error, ping_test_ok, ping_test_ms
+			FROM handshakes
+			ORDER BY timestamp DESC
+			LIMIT ?`
+		args = []interface{}{limit}
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var records []HandshakeRecord
+	for rows.Next() {
+		var r HandshakeRecord
+		var tsMs int64
+		var sshOK, pingOK int
+		var vpnAddr, pubIP, hostname, osName, arch, version, goVersion, installTS, sshErr sql.NullString
+
+		if err := rows.Scan(&r.ID, &tsMs, &r.NodeName, &vpnAddr, &pubIP, &hostname, &osName, &arch, &version, &goVersion, &installTS, &sshOK, &sshErr, &pingOK, &r.PingTestMS); err != nil {
+			return nil, 0, err
+		}
+
+		r.Timestamp = time.UnixMilli(tsMs)
+		r.VPNAddress = vpnAddr.String
+		r.PublicIP = pubIP.String
+		r.Hostname = hostname.String
+		r.OS = osName.String
+		r.Arch = arch.String
+		r.Version = version.String
+		r.GoVersion = goVersion.String
+		r.InstallTS = installTS.String
+		r.SSHTestOK = sshOK == 1
+		r.SSHTestError = sshErr.String
+		r.PingTestOK = pingOK == 1
+
+		records = append(records, r)
+	}
+
+	// Get total count
+	var total int
+	countQuery := "SELECT COUNT(*) FROM handshakes"
+	if nodeName != "" {
+		countQuery += " WHERE node_name = ?"
+		s.db.QueryRow(countQuery, nodeName).Scan(&total)
+	} else {
+		s.db.QueryRow(countQuery).Scan(&total)
+	}
+
+	return records, total, nil
 }
