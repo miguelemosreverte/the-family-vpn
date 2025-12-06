@@ -13,8 +13,9 @@
 INSTALL_DIR="$HOME/the-family-vpn"
 LOG_FILE="/var/log/vpn-health.log"
 CHECK_INTERVAL=5      # Seconds between checks
-WIFI_RESTART_THRESHOLD=2   # Failures before Wi-Fi restart
+WIFI_RESTART_THRESHOLD=2   # Failures before Wi-Fi restart (when VPN running)
 NUCLEAR_THRESHOLD=3        # Failures before killing VPN
+NO_VPN_RESTART_THRESHOLD=5 # Failures before Wi-Fi restart (when VPN not running)
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | sudo tee -a "$LOG_FILE" > /dev/null
@@ -155,8 +156,9 @@ main() {
             failures=$((failures + 1))
             log "Internet check FAILED (failure #$failures)"
 
-            # Only attempt recovery if VPN is running (otherwise it's not VPN's fault)
+            # Attempt recovery based on whether VPN is running
             if pgrep -f "vpn-node" > /dev/null; then
+                # VPN is running - aggressive recovery
                 if [[ "$failures" -ge "$NUCLEAR_THRESHOLD" ]]; then
                     # Nuclear option: kill VPN + restart network
                     nuclear_option
@@ -175,7 +177,19 @@ main() {
                     fi
                 fi
             else
-                log "VPN is not running, skipping network restart (not VPN's fault)"
+                # VPN not running - still try to recover after more failures
+                # This handles cases where network died for other reasons
+                if [[ "$failures" -ge "$NO_VPN_RESTART_THRESHOLD" ]]; then
+                    log "VPN not running, but too many failures - attempting network restart anyway..."
+                    restart_network
+                    sleep 3
+                    if check_internet; then
+                        log "Network restart fixed the issue!"
+                        failures=0
+                    fi
+                else
+                    log "VPN is not running, waiting for more failures before restart ($failures/$NO_VPN_RESTART_THRESHOLD)"
+                fi
             fi
         fi
 
@@ -201,6 +215,7 @@ if [[ "$1" == "--once" ]]; then
         log "Internet check FAILED (failure #$failures)"
 
         if pgrep -f "vpn-node" > /dev/null; then
+            # VPN is running - aggressive recovery
             if [[ "$failures" -ge "$NUCLEAR_THRESHOLD" ]]; then
                 nuclear_option
                 echo 0 > /tmp/vpn-health-state
@@ -212,6 +227,19 @@ if [[ "$1" == "--once" ]]; then
                     log "Network restart fixed the issue!"
                     echo 0 > /tmp/vpn-health-state
                 fi
+            fi
+        else
+            # VPN not running - still try to recover after more failures
+            if [[ "$failures" -ge "$NO_VPN_RESTART_THRESHOLD" ]]; then
+                log "VPN not running, but too many failures - attempting network restart anyway..."
+                restart_network
+                sleep 3
+                if check_internet; then
+                    log "Network restart fixed the issue!"
+                    echo 0 > /tmp/vpn-health-state
+                fi
+            else
+                log "VPN is not running, waiting for more failures before restart ($failures/$NO_VPN_RESTART_THRESHOLD)"
             fi
         fi
     fi
