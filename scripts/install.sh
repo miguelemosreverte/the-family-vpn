@@ -888,6 +888,7 @@ install_macos_service() {
     PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-node.plist"
 
     # Create plist
+    # IMPORTANT: PATH includes /opt/homebrew/bin for sshpass (used for SSH from UI terminal)
     sudo tee "$PLIST_PATH" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -917,6 +918,13 @@ install_macos_service() {
     <string>/var/log/vpn-node.log</string>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 </dict>
 </plist>
 EOF
