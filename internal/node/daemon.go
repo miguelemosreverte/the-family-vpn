@@ -412,8 +412,14 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 		return
 	}
 
-	// Assign IP
-	vpnIP := d.assignIP(peerInfo.Hostname)
+	// Extract public IP from remote address for stable client identification
+	publicIP := ""
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		publicIP = host
+	}
+
+	// Assign IP (using public IP for stable tracking across hostname changes)
+	vpnIP := d.assignIP(peerInfo.Hostname, publicIP)
 
 	// Send assigned IP
 	if err := protocol.WriteAssignedIP(conn.NetConn, vpnIP); err != nil {
@@ -702,25 +708,69 @@ func (d *Daemon) forwardServerToTUN() {
 	}
 }
 
-// assignIP assigns a VPN IP to a hostname (with persistence).
-func (d *Daemon) assignIP(hostname string) string {
+// assignIP assigns a VPN IP to a client (with persistence by public IP and hostname).
+// publicIP is the client's public IP address (used for stable identification).
+func (d *Daemon) assignIP(hostname string, publicIP string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// First, check if the public IP already has an assigned VPN IP
+	// This handles cases where hostname changes (e.g., network changes)
+	if publicIP != "" {
+		if ip, exists := d.hostnameToIP["ip:"+publicIP]; exists {
+			// Verify IP is not in use by a different connection
+			if peer, inUse := d.peers[ip]; !inUse || (inUse && peer.Name == hostname) {
+				// Update hostname mapping too
+				d.hostnameToIP[hostname] = ip
+				return ip
+			}
+		}
+	}
 
 	// Check if hostname already has an IP
 	if ip, exists := d.hostnameToIP[hostname]; exists {
 		// Verify IP is not in use
 		if _, inUse := d.peers[ip]; !inUse {
+			// Also store by public IP for future lookups
+			if publicIP != "" {
+				d.hostnameToIP["ip:"+publicIP] = ip
+			}
 			return ip
 		}
 	}
 
-	// Assign new IP
-	ip := fmt.Sprintf("10.8.0.%d", d.nextIP)
-	d.nextIP++
-	d.hostnameToIP[hostname] = ip
+	// Assign new IP (with wrap-around to prevent overflow)
+	// Skip .1 (server) and wrap at .254
+	if d.nextIP > 254 {
+		d.nextIP = 2
+	}
 
-	return ip
+	// Find an unused IP (in case of wrap-around)
+	startIP := d.nextIP
+	for {
+		ip := fmt.Sprintf("10.8.0.%d", d.nextIP)
+		d.nextIP++
+		if d.nextIP > 254 {
+			d.nextIP = 2
+		}
+
+		// Check if this IP is in use
+		if _, inUse := d.peers[ip]; !inUse {
+			d.hostnameToIP[hostname] = ip
+			if publicIP != "" {
+				d.hostnameToIP["ip:"+publicIP] = ip
+			}
+			return ip
+		}
+
+		// Prevent infinite loop if all IPs are in use
+		if d.nextIP == startIP {
+			// All IPs exhausted, assign anyway (will fail later)
+			ip := fmt.Sprintf("10.8.0.%d", d.nextIP)
+			d.nextIP++
+			return ip
+		}
+	}
 }
 
 // initStorage initializes the SQLite storage and metrics collection.
