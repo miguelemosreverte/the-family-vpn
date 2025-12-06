@@ -173,6 +173,64 @@ func (t *TUN) Close() error {
 	return nil
 }
 
+// Reconfigure updates the TUN device with a new local IP.
+// This is used when reconnecting and the server assigns a different IP.
+func (t *TUN) Reconfigure(newLocalIP string) error {
+	if newLocalIP == t.localIP {
+		log.Printf("[tun] IP unchanged (%s), no reconfiguration needed", newLocalIP)
+		return nil
+	}
+
+	log.Printf("[tun] Reconfiguring %s: %s -> %s", t.name, t.localIP, newLocalIP)
+	t.localIP = newLocalIP
+
+	if runtime.GOOS == "darwin" {
+		return t.reconfigureDarwin()
+	}
+	return t.reconfigureLinux()
+}
+
+// reconfigureDarwin reconfigures the TUN device on macOS.
+func (t *TUN) reconfigureDarwin() error {
+	// On macOS, we need to update the point-to-point addresses
+	// First delete the old address configuration
+	cmd := exec.Command("ifconfig", t.name, "delete", t.localIP)
+	cmd.Run() // Ignore error, might fail if old IP already removed
+
+	// Reconfigure with new IP
+	cmd = exec.Command("ifconfig", t.name, t.localIP, t.gatewayIP, "up")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to reconfigure %s: %v - %s", t.name, err, out)
+	}
+
+	// Re-add subnet route (might be lost after reconfig)
+	cmd = exec.Command("route", "-n", "add", "-net", DefaultSubnet, "-interface", t.name)
+	cmd.Run() // Ignore error if route exists
+
+	log.Printf("[tun] Reconfigured %s: %s -> %s", t.name, t.localIP, t.gatewayIP)
+	return nil
+}
+
+// reconfigureLinux reconfigures the TUN device on Linux.
+func (t *TUN) reconfigureLinux() error {
+	// Flush existing IPs
+	exec.Command("ip", "addr", "flush", "dev", t.name).Run()
+
+	// Assign new IP address
+	cmd := exec.Command("ip", "addr", "add", t.localIP+"/24", "dev", t.name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to assign IP: %v - %s", err, out)
+	}
+
+	log.Printf("[tun] Reconfigured %s: %s/24", t.name, t.localIP)
+	return nil
+}
+
+// LocalIP returns the current local IP of the TUN device.
+func (t *TUN) LocalIP() string {
+	return t.localIP
+}
+
 // GetDefaultGateway returns the current default gateway.
 func GetDefaultGateway() (string, error) {
 	var cmd *exec.Cmd

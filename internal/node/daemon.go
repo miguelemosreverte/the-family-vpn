@@ -1352,12 +1352,22 @@ func (d *Daemon) attemptReconnect(restoreRouteAll bool) {
 		}
 
 		d.vpnConn = conn
+		oldIP := d.config.VPNAddress
 		d.config.VPNAddress = assignedIP
 
 		log.Printf("[vpn] ========================================")
 		log.Printf("[vpn] RECONNECTED SUCCESSFULLY!")
 		log.Printf("[vpn] ========================================")
 		log.Printf("[vpn] Assigned VPN IP: %s", assignedIP)
+
+		// Reconfigure TUN device if IP changed
+		if d.tun != nil && oldIP != assignedIP {
+			log.Printf("[vpn] VPN IP changed from %s to %s, reconfiguring TUN...", oldIP, assignedIP)
+			if err := d.tun.Reconfigure(assignedIP); err != nil {
+				log.Printf("[vpn] Warning: failed to reconfigure TUN: %v", err)
+				log.Printf("[vpn] Will attempt to continue with existing configuration")
+			}
+		}
 
 		// Restore route-all if it was enabled before
 		if restoreRouteAll && d.tun != nil {
