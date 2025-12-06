@@ -21,20 +21,34 @@ log() {
 }
 
 # Check if we have internet connectivity
+# Uses both ICMP (ping) and TCP to detect routing table corruption
 check_internet() {
     # Try multiple endpoints to avoid false positives
     # Use IP addresses to avoid DNS issues
     # Short timeout (2 sec) for aggressive checking
+
+    # First check ICMP (ping)
+    local ping_ok=false
     if ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
-        return 0
+        ping_ok=true
+    elif ping -c 1 -W 2 1.1.1.1 &>/dev/null; then
+        ping_ok=true
+    elif ping -c 1 -W 2 95.217.238.72 &>/dev/null; then
+        ping_ok=true
     fi
-    if ping -c 1 -W 2 1.1.1.1 &>/dev/null; then
-        return 0
+
+    if [[ "$ping_ok" == "false" ]]; then
+        return 1
     fi
-    if ping -c 1 -W 2 95.217.238.72 &>/dev/null; then
-        return 0
+
+    # Also check TCP connectivity to VPN server
+    # This catches "can't assign requested address" errors where ping works but TCP fails
+    if ! nc -z -w 2 95.217.238.72 443 &>/dev/null; then
+        log "WARNING: Ping works but TCP to VPN server failed (routing table may be corrupted)"
+        return 1
     fi
-    return 1
+
+    return 0
 }
 
 # Restart network interface on macOS
@@ -48,6 +62,14 @@ restart_network_macos() {
     fi
 
     log "Wi-Fi interface: $wifi_interface"
+
+    # First, flush routing table to clear stale VPN routes
+    # This fixes "can't assign requested address" errors
+    log "Flushing routing table..."
+    sudo route -n flush 2>/dev/null || true
+
+    # Delete any stale route to the VPN server
+    sudo route delete 95.217.238.72 2>/dev/null || true
 
     # Turn Wi-Fi off
     networksetup -setairportpower "$wifi_interface" off
