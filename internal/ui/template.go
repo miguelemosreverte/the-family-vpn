@@ -1353,6 +1353,30 @@ func init() {
             </table>
         </div>
 
+        <!-- Section 2b: Install Handshakes History -->
+        <div class="section-header">
+            <h2 class="section-title">Install Handshakes</h2>
+            <span style="color: var(--text-secondary); font-size: 12px;" id="handshakes-count"></span>
+        </div>
+        <div class="table-container" style="margin-bottom: 24px;">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort="timestamp">Timestamp</th>
+                        <th class="sortable" data-sort="node_name">Node</th>
+                        <th>VPN IP</th>
+                        <th>Public IP</th>
+                        <th>Version</th>
+                        <th>OS</th>
+                        <th>Ping</th>
+                        <th>SSH</th>
+                    </tr>
+                </thead>
+                <tbody id="handshakes-tbody">
+                </tbody>
+            </table>
+        </div>
+
         <!-- Section 3: Observability -->
         <div class="section-header">
             <h2 class="section-title">Observability</h2>
@@ -1574,8 +1598,9 @@ func init() {
                 document.getElementById('home-uptime').textContent = status.uptime_str || '-';
                 document.getElementById('home-version').textContent = 'v' + (status.version || '0.1.0');
 
-                // Also load network peers
+                // Also load network peers and handshakes
                 loadNetworkPeers();
+                loadHandshakes();
             } catch (err) {
                 console.error('Failed to load home:', err);
             }
@@ -1647,6 +1672,53 @@ func init() {
             } catch (err) {
                 console.error('Failed to load network peers:', err);
                 container.innerHTML = '<div class="empty-state"><p>Failed to load peers</p></div>';
+            }
+        }
+
+        // Load install handshakes history
+        async function loadHandshakes() {
+            const tbody = document.getElementById('handshakes-tbody');
+            const countEl = document.getElementById('handshakes-count');
+
+            try {
+                const res = await fetch('/api/handshakes');
+                if (!res.ok) throw new Error('Failed to fetch handshakes');
+                const data = await res.json();
+
+                const entries = data.entries || [];
+                countEl.textContent = entries.length + ' record' + (entries.length !== 1 ? 's' : '');
+
+                if (entries.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-secondary);">No handshakes recorded yet</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = entries.map(entry => {
+                    const ts = new Date(entry.timestamp).toLocaleString();
+                    const pingBadge = entry.ping_test_ok
+                        ? ` + "`" + `<span style="color: var(--success);">${entry.ping_test_ms}ms</span>` + "`" + `
+                        : '<span style="color: var(--error);">FAIL</span>';
+                    const sshBadge = entry.ssh_test_ok
+                        ? '<span style="color: var(--success);">OK</span>'
+                        : '<span style="color: var(--error);">FAIL</span>';
+                    const osDisplay = entry.os + '/' + entry.arch;
+
+                    return ` + "`" + `
+                        <tr>
+                            <td>${ts}</td>
+                            <td>${entry.node_name || '-'}</td>
+                            <td>${entry.vpn_address || '-'}</td>
+                            <td>${entry.public_ip || '-'}</td>
+                            <td><code>${entry.version || '-'}</code></td>
+                            <td>${osDisplay}</td>
+                            <td>${pingBadge}</td>
+                            <td>${sshBadge}</td>
+                        </tr>
+                    ` + "`" + `;
+                }).join('');
+            } catch (err) {
+                console.error('Failed to load handshakes:', err);
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--error);">Failed to load handshakes</td></tr>';
             }
         }
 
