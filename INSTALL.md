@@ -139,6 +139,19 @@ sudo rm /etc/systemd/system/vpn-node.service
 rm -rf ~/the-family-vpn
 ```
 
+## Automatic Updates
+
+The VPN automatically updates every hour:
+- Pulls latest code from GitHub
+- Rebuilds binaries if there are changes
+- Restarts the VPN service (only if code changed)
+- Ensures the VPN is always running
+
+Check update logs:
+```bash
+sudo cat /var/log/vpn-update.log
+```
+
 ## How It Works
 
 ```
@@ -162,3 +175,4 @@ Your Computer                          Server (Helsinki)
 - The server in Helsinki connects everyone together
 - Auto-reconnects if connection drops
 - Starts automatically on boot
+- Updates automatically every hour
