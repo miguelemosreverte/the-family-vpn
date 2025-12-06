@@ -29,10 +29,9 @@ GO_VERSION="1.22.0"
 SUDO_PASSWORD="${SUDO_PASSWORD:-}"
 
 # Load .env file (required for SUDO_PASSWORD)
-# Automatically fetches from private GitHub gist if not found locally
+# The .env file is included in the repository for convenience
 load_env() {
     local env_file=""
-    local gist_id="b523442d7bec467dbba22a21feab027e"
 
     # Check multiple locations for .env
     if [[ -f "$INSTALL_DIR/.env" ]]; then
@@ -41,71 +40,6 @@ load_env() {
         env_file="$(dirname "$0")/../.env"
     elif [[ -f ".env" ]]; then
         env_file=".env"
-    fi
-
-    # If no .env found locally, try to fetch from private gist
-    if [[ -z "$env_file" ]]; then
-        print_step "No local .env found, fetching from private gist..."
-
-        # Check if gh CLI is available
-        if ! command -v gh &>/dev/null; then
-            print_warning "GitHub CLI (gh) not installed. Installing..."
-            if [[ "$OSTYPE" == "darwin"* ]]; then
-                # Install via Homebrew on macOS
-                if command -v brew &>/dev/null; then
-                    brew install gh
-                else
-                    print_error "Homebrew not found. Please install gh CLI manually:"
-                    print_error "  brew install gh"
-                    print_error "Or download from: https://cli.github.com/"
-                    exit 1
-                fi
-            else
-                # Install on Linux
-                if command -v apt-get &>/dev/null; then
-                    sudo apt-get update && sudo apt-get install -y gh
-                elif command -v dnf &>/dev/null; then
-                    sudo dnf install -y gh
-                elif command -v yum &>/dev/null; then
-                    sudo yum install -y gh
-                else
-                    print_error "Could not install gh CLI. Please install manually:"
-                    print_error "  https://cli.github.com/"
-                    exit 1
-                fi
-            fi
-        fi
-
-        # Check if gh is authenticated
-        if ! gh auth status &>/dev/null; then
-            print_warning "GitHub CLI not authenticated. Please authenticate:"
-            echo ""
-            gh auth login
-            echo ""
-        fi
-
-        # Fetch the gist
-        local temp_dir="/tmp/vpn-env-gist-$$"
-        if gh gist clone "$gist_id" "$temp_dir" 2>/dev/null; then
-            if [[ -f "$temp_dir/.env" ]]; then
-                # Copy to install directory (will be created later if doesn't exist)
-                mkdir -p "$INSTALL_DIR"
-                cp "$temp_dir/.env" "$INSTALL_DIR/.env"
-                env_file="$INSTALL_DIR/.env"
-                print_success "Fetched .env from private gist"
-            else
-                print_error "Gist cloned but .env file not found in it"
-            fi
-            rm -rf "$temp_dir"
-        else
-            print_error "Failed to fetch .env from gist. Please authenticate with GitHub:"
-            print_error "  gh auth login"
-            print_error ""
-            print_error "Or manually fetch the .env:"
-            print_error "  gh gist clone $gist_id"
-            print_error "  cp $gist_id/.env $INSTALL_DIR/"
-            exit 1
-        fi
     fi
 
     if [[ -n "$env_file" ]]; then
@@ -129,8 +63,9 @@ load_env() {
 
     # Check if SUDO_PASSWORD is set
     if [[ -z "$SUDO_PASSWORD" ]]; then
-        print_error "SUDO_PASSWORD not found in .env file!"
-        print_error "The .env file must contain: SUDO_PASSWORD=yourpassword"
+        print_error "SUDO_PASSWORD not found!"
+        print_error "The .env file should be included in the repository."
+        print_error "Try: git pull origin main"
         exit 1
     fi
 }

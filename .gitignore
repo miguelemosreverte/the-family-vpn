@@ -45,8 +45,8 @@ certs/*.pem
 *.log
 logs/
 
-# Environment files
-.env
+# Environment files (local overrides only)
+# NOTE: .env is committed for family VPN convenience - this is a private repo
 .env.local
 .env.*.local
 
