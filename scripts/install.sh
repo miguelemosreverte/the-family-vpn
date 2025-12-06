@@ -76,6 +76,11 @@ load_env() {
 
 # Run sudo command with password from SUDO_PASSWORD
 run_sudo() {
+    # Use sudo -n first (non-interactive, uses cached credentials)
+    # If that fails, fall back to password
+    if sudo -n "$@" 2>/dev/null; then
+        return 0
+    fi
     echo "$SUDO_PASSWORD" | sudo -S "$@" 2>/dev/null
 }
 
@@ -270,6 +275,41 @@ install_git() {
             print_error "Git installation failed!"
             exit 1
         fi
+    fi
+}
+
+# Install sshpass (macOS) - required for UI SSH functionality
+install_sshpass_macos() {
+    if command -v sshpass &> /dev/null || [[ -x "/opt/homebrew/bin/sshpass" ]]; then
+        print_success "sshpass is already installed"
+        return
+    fi
+
+    print_step "Installing sshpass for SSH functionality..."
+
+    # Check if Homebrew is installed
+    if ! command -v brew &> /dev/null; then
+        if [[ -x "/opt/homebrew/bin/brew" ]]; then
+            export PATH="/opt/homebrew/bin:$PATH"
+        elif [[ -x "/usr/local/bin/brew" ]]; then
+            export PATH="/usr/local/bin:$PATH"
+        else
+            print_warning "Homebrew not found. Installing Homebrew first..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            if [[ -x "/opt/homebrew/bin/brew" ]]; then
+                export PATH="/opt/homebrew/bin:$PATH"
+            fi
+        fi
+    fi
+
+    # Install sshpass via Homebrew
+    # Note: sshpass is in a tap, not the main repo
+    brew install hudochenkov/sshpass/sshpass 2>/dev/null || brew install sshpass 2>/dev/null || true
+
+    if command -v sshpass &> /dev/null || [[ -x "/opt/homebrew/bin/sshpass" ]]; then
+        print_success "sshpass installed successfully"
+    else
+        print_warning "sshpass installation failed - SSH from UI may not work"
     fi
 }
 
@@ -862,6 +902,7 @@ install_macos_service() {
         <string>$VPN_SERVER</string>
         <string>--name</string>
         <string>$NODE_NAME</string>
+        <string>--route-all</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -893,6 +934,7 @@ install_macos_ui_service() {
     PLIST_PATH="/Library/LaunchDaemons/com.family.vpn-ui.plist"
 
     # Create plist for UI
+    # IMPORTANT: PATH includes /opt/homebrew/bin for sshpass (used for SSH from UI)
     sudo tee "$PLIST_PATH" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -919,6 +961,13 @@ install_macos_ui_service() {
     <string>/var/log/vpn-ui.log</string>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 </dict>
 </plist>
 EOF
@@ -1120,6 +1169,9 @@ main() {
     cleanup_existing
     install_git
     install_go
+    if [[ "$OS" == "macos" ]]; then
+        install_sshpass_macos
+    fi
     setup_repository
     build_binaries
     setup_health_watchdog
