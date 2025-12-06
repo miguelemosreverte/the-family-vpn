@@ -975,11 +975,16 @@ EOF
     sudo chown root:wheel "$PLIST_PATH"
     sudo chmod 644 "$PLIST_PATH"
 
-    # Load the UI service
-    sudo launchctl unload "$PLIST_PATH" 2>/dev/null || true
-    sudo launchctl load "$PLIST_PATH"
+    # Kill any existing UI processes to ensure clean restart with new binary
+    run_sudo pkill -9 -f "vpn.*ui" || true
+    sleep 1
 
-    print_success "UI service installed (http://localhost:8080)"
+    # Unload and reload the UI service to pick up new binary
+    sudo launchctl bootout system/com.family.vpn-ui 2>/dev/null || true
+    sleep 1
+    sudo launchctl bootstrap system "$PLIST_PATH"
+
+    print_success "UI service installed and restarted (http://localhost:8080)"
 }
 
 # Install systemd service (Linux)
@@ -1033,11 +1038,15 @@ WorkingDirectory=$INSTALL_DIR
 WantedBy=multi-user.target
 EOF
 
+    # Kill any existing UI processes to ensure clean restart with new binary
+    sudo pkill -9 -f "vpn.*ui" 2>/dev/null || true
+    sleep 1
+
     sudo systemctl daemon-reload
     sudo systemctl enable vpn-ui
-    sudo systemctl start vpn-ui
+    sudo systemctl restart vpn-ui
 
-    print_success "UI service installed (http://localhost:8080)"
+    print_success "UI service installed and restarted (http://localhost:8080)"
 }
 
 # Start the VPN service
