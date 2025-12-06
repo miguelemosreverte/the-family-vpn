@@ -397,6 +397,7 @@ Usage examples:
 
 func uiCmd() *cobra.Command {
 	var listenAddr string
+	var templatesDir string
 
 	cmd := &cobra.Command{
 		Use:   "ui",
@@ -416,7 +417,8 @@ Node selection priority:
 Examples:
   vpn ui                           # Start on http://localhost:8080
   vpn ui --listen :3000            # Start on port 3000
-  vpn --node 10.8.0.1:9001 ui      # Connect to remote node`,
+  vpn --node 10.8.0.1:9001 ui      # Connect to remote node
+  vpn ui --templates ./internal/ui/templates  # Hot reload from disk`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Determine which node to connect to
 			targetNode := nodeAddr
@@ -448,11 +450,16 @@ Examples:
 			}
 
 			server := ui.NewServer(targetNode, listenAddr)
+			if templatesDir != "" {
+				server.SetTemplatesDir(templatesDir)
+				fmt.Printf("  Hot reload enabled: %s\n", templatesDir)
+			}
 			return server.Start()
 		},
 	}
 
 	cmd.Flags().StringVar(&listenAddr, "listen", "localhost:8080", "Address to listen on")
+	cmd.Flags().StringVar(&templatesDir, "templates", "", "Load templates from disk for hot reload (dev mode)")
 
 	return cmd
 }
