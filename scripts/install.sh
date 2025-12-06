@@ -24,6 +24,64 @@ REPO_URL="https://github.com/miguelemosreverte/the-family-vpn.git"
 INSTALL_DIR="$HOME/the-family-vpn"
 GO_VERSION="1.22.0"
 
+# Family password for sudo automation (all family machines use the same password)
+# Can be overridden via environment variable or .env file
+SUDO_PASSWORD="${SUDO_PASSWORD:-osopanda}"
+
+# Load .env file if it exists (from repo root or install dir)
+load_env() {
+    local env_file=""
+    if [[ -f "$INSTALL_DIR/.env" ]]; then
+        env_file="$INSTALL_DIR/.env"
+    elif [[ -f "$(dirname "$0")/../.env" ]]; then
+        env_file="$(dirname "$0")/../.env"
+    elif [[ -f ".env" ]]; then
+        env_file=".env"
+    fi
+
+    if [[ -n "$env_file" ]]; then
+        print_step "Loading configuration from $env_file"
+        # Source the .env file, extracting SUDO_PASSWORD if present
+        while IFS='=' read -r key value; do
+            # Skip comments and empty lines
+            [[ "$key" =~ ^#.*$ ]] && continue
+            [[ -z "$key" ]] && continue
+            # Remove quotes from value
+            value="${value%\"}"
+            value="${value#\"}"
+            value="${value%\'}"
+            value="${value#\'}"
+            # Export the variable
+            if [[ "$key" == "SUDO_PASSWORD" ]]; then
+                SUDO_PASSWORD="$value"
+            fi
+        done < "$env_file"
+    fi
+}
+
+# Run sudo command with password from SUDO_PASSWORD
+run_sudo() {
+    echo "$SUDO_PASSWORD" | sudo -S "$@" 2>/dev/null
+}
+
+# Validate sudo password works and cache credentials
+validate_sudo() {
+    print_step "Validating sudo access..."
+    if echo "$SUDO_PASSWORD" | sudo -S -v 2>/dev/null; then
+        print_success "Sudo access validated"
+        # Keep sudo timestamp updated in background
+        while true; do
+            sudo -n true
+            sleep 50
+            kill -0 "$$" 2>/dev/null || exit
+        done &
+        return 0
+    else
+        print_error "Invalid sudo password. Please check SUDO_PASSWORD."
+        return 1
+    fi
+}
+
 print_header() {
     echo ""
     echo -e "${BLUE}════════════════════════════════════════════════════════════${NC}"
@@ -53,46 +111,46 @@ cleanup_existing() {
     print_step "Cleaning up existing VPN installation..."
 
     # Kill all VPN processes first
-    sudo pkill -9 -f "vpn-node" 2>/dev/null || true
-    sudo pkill -9 -f "vpn.*ui" 2>/dev/null || true
+    run_sudo pkill -9 -f "vpn-node" || true
+    run_sudo pkill -9 -f "vpn.*ui" || true
     sleep 2
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # Unload all launchd services
-        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
-        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-ui.plist 2>/dev/null || true
-        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-update.plist 2>/dev/null || true
-        sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-health.plist 2>/dev/null || true
+        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-node.plist || true
+        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-ui.plist || true
+        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-update.plist || true
+        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-health.plist || true
 
         # Remove plist files
-        sudo rm -f /Library/LaunchDaemons/com.family.vpn-node.plist 2>/dev/null || true
-        sudo rm -f /Library/LaunchDaemons/com.family.vpn-ui.plist 2>/dev/null || true
-        sudo rm -f /Library/LaunchDaemons/com.family.vpn-update.plist 2>/dev/null || true
-        sudo rm -f /Library/LaunchDaemons/com.family.vpn-health.plist 2>/dev/null || true
+        run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-node.plist || true
+        run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-ui.plist || true
+        run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-update.plist || true
+        run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-health.plist || true
     else
         # Stop and disable systemd services
-        sudo systemctl stop vpn-node 2>/dev/null || true
-        sudo systemctl stop vpn-ui 2>/dev/null || true
-        sudo systemctl stop vpn-update.timer 2>/dev/null || true
-        sudo systemctl stop vpn-health.timer 2>/dev/null || true
-        sudo systemctl disable vpn-node 2>/dev/null || true
-        sudo systemctl disable vpn-ui 2>/dev/null || true
-        sudo systemctl disable vpn-update.timer 2>/dev/null || true
-        sudo systemctl disable vpn-health.timer 2>/dev/null || true
+        run_sudo systemctl stop vpn-node || true
+        run_sudo systemctl stop vpn-ui || true
+        run_sudo systemctl stop vpn-update.timer || true
+        run_sudo systemctl stop vpn-health.timer || true
+        run_sudo systemctl disable vpn-node || true
+        run_sudo systemctl disable vpn-ui || true
+        run_sudo systemctl disable vpn-update.timer || true
+        run_sudo systemctl disable vpn-health.timer || true
 
         # Remove service files
-        sudo rm -f /etc/systemd/system/vpn-node.service 2>/dev/null || true
-        sudo rm -f /etc/systemd/system/vpn-ui.service 2>/dev/null || true
-        sudo rm -f /etc/systemd/system/vpn-update.service 2>/dev/null || true
-        sudo rm -f /etc/systemd/system/vpn-update.timer 2>/dev/null || true
-        sudo rm -f /etc/systemd/system/vpn-health.service 2>/dev/null || true
-        sudo rm -f /etc/systemd/system/vpn-health.timer 2>/dev/null || true
-        sudo systemctl daemon-reload
+        run_sudo rm -f /etc/systemd/system/vpn-node.service || true
+        run_sudo rm -f /etc/systemd/system/vpn-ui.service || true
+        run_sudo rm -f /etc/systemd/system/vpn-update.service || true
+        run_sudo rm -f /etc/systemd/system/vpn-update.timer || true
+        run_sudo rm -f /etc/systemd/system/vpn-health.service || true
+        run_sudo rm -f /etc/systemd/system/vpn-health.timer || true
+        run_sudo systemctl daemon-reload || true
     fi
 
     # Clear health state file (reset failure counter)
-    sudo rm -f /tmp/vpn-health-state 2>/dev/null || true
-    sudo rm -f /tmp/vpn-update.lock 2>/dev/null || true
+    run_sudo rm -f /tmp/vpn-health-state || true
+    run_sudo rm -f /tmp/vpn-update.lock || true
 
     print_success "Cleanup complete"
 }
@@ -1086,7 +1144,8 @@ main() {
     print_header "Family VPN Client Installer"
 
     detect_os
-    check_sudo
+    load_env
+    validate_sudo || exit 1
     cleanup_existing
     install_git
     install_go
