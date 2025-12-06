@@ -349,10 +349,18 @@ func (s *Server) handleVNCConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHandshakes returns the history of install handshakes from all clients.
+// Handshakes are always stored on the server (10.8.0.1), so we query the server directly.
 func (s *Server) handleHandshakes(w http.ResponseWriter, r *http.Request) {
-	client, err := s.getClient()
+	// Always query the server for handshakes since they're stored centrally
+	serverAddr := "10.8.0.1:9001"
+	client, err := cli.NewClient(serverAddr)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		// If we can't reach the server, return empty result
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(protocol.HandshakeHistoryResult{
+			Entries: []protocol.HandshakeEntry{},
+			Total:   0,
+		})
 		return
 	}
 	defer client.Close()
