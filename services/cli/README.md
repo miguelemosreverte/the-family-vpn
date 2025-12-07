@@ -9,6 +9,62 @@ The CLI (`vpn` binary) is used to interact with the VPN node daemon. Updates to 
 - `cmd/vpn/main.go` - CLI entry point
 - `internal/cli/` - CLI client library
 
+## Available Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `status` | - | Show node status (name, version, uptime, VPN IP) |
+| `diagnose` | `diag`, `doctor`, `health` | Run comprehensive VPN connectivity diagnostics |
+| `peers` | - | List connected peers |
+| `network-peers` | `np`, `net-peers` | List all peers in the VPN network |
+| `verify` | - | Verify VPN routing is working |
+| `connect` | - | Enable VPN routing (route all traffic through VPN) |
+| `disconnect` | - | Disable VPN routing (restore direct traffic) |
+| `ssh` | - | SSH to a peer via VPN |
+| `update` | - | Update node(s) with --all and --rolling options |
+| `logs` | - | Query logs with Splunk-like time syntax |
+| `stats` | - | Query metrics with Splunk-like time syntax |
+| `crashes` | `crash`, `crash-stats` | Show crash statistics and last crash details |
+| `lifecycle` | `events`, `history` | Show recent lifecycle events |
+| `handshake` | - | Send install handshake to server |
+| `handshakes` | - | Show install handshake history |
+| `ui` | - | Start web dashboard |
+| `version` | - | Show CLI and node version |
+
+## Diagnostics
+
+The `diagnose` command runs comprehensive connectivity checks:
+
+```bash
+vpn diagnose           # Run all diagnostics
+vpn diagnose -v        # Verbose output with details
+vpn diagnose --json    # JSON output for scripting
+```
+
+Checks performed:
+1. **Local VPN Node** - Is the daemon running and responding?
+2. **VPN Server** - Can we ping 10.8.0.1?
+3. **Peer Discovery** - Are we receiving peer lists?
+4. **Traffic Routing** - Is traffic routed through VPN?
+5. **DNS Resolution** - Is DNS working?
+6. **VPN Interface** - Is the TUN interface up?
+7. **Internet Connectivity** - Can we reach external hosts?
+
+Example output:
+```
+VPN Connectivity Diagnostics
+═══════════════════════════════════════════════════════════════
+[PASS] Local VPN Node       miguels-macbook-air (vfed3efc) - VPN IP: 10.8.0.2
+[PASS] VPN Server (10.8.0.1) Server reachable
+[PASS] Peer Discovery       3 peers discovered
+[PASS] Traffic Routing      Traffic routed through VPN
+[PASS] DNS Resolution       DNS working
+[PASS] VPN Interface        Interface utun0 is UP
+[PASS] Internet Connectivity Internet reachable
+
+Summary: 7 passed, 0 failed, 0 warnings
+```
+
 ## Deployment
 
 When `VERSION` changes, only the CLI binary is rebuilt. The VPN node continues running uninterrupted.

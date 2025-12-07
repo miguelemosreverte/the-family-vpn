@@ -6,11 +6,18 @@
 //
 // Commands:
 //
-//	status   Show node status
-//	peers    List connected peers
-//	update   Update node(s)
-//	logs     Query logs (Splunk-like)
-//	stats    Query metrics (Splunk-like)
+//	status     Show node status
+//	peers      List connected peers
+//	diagnose   Run comprehensive VPN connectivity diagnostics
+//	update     Update node(s)
+//	logs       Query logs (Splunk-like)
+//	stats      Query metrics (Splunk-like)
+//	verify     Verify VPN routing is working
+//	connect    Enable VPN routing (route all traffic through VPN)
+//	disconnect Disable VPN routing (restore direct traffic)
+//	ssh        SSH to a peer via VPN
+//	handshake  Send install handshake to server
+//	handshakes Show install handshake history
 //
 // Global Flags:
 //
@@ -67,6 +74,7 @@ Use --node to connect to a remote node.`,
 	rootCmd.AddCommand(lifecycleCmd())
 	rootCmd.AddCommand(handshakeCmd())
 	rootCmd.AddCommand(handshakesCmd())
+	rootCmd.AddCommand(diagnoseCmd())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
@@ -1475,3 +1483,401 @@ func dialWithTimeout(network, addr string, timeout time.Duration) (interface{ Cl
 type dummyCloser struct{}
 
 func (d *dummyCloser) Close() error { return nil }
+
+// diagnoseCmd runs comprehensive VPN connectivity diagnostics.
+func diagnoseCmd() *cobra.Command {
+	var outputJSON bool
+	var verbose bool
+
+	cmd := &cobra.Command{
+		Use:     "diagnose",
+		Aliases: []string{"diag", "doctor", "health"},
+		Short:   "Run comprehensive VPN connectivity diagnostics",
+		Long: `Run a comprehensive diagnostic check on VPN connectivity.
+
+This command performs the following checks:
+  1. Local VPN node status (process running, version, uptime)
+  2. VPN server reachability (ping to 10.8.0.1)
+  3. Peer discovery and connectivity
+  4. Routing verification (public IP check)
+  5. DNS resolution test
+  6. Network interface status
+
+The output shows a summary with pass/fail status for each check,
+making it easy to identify connectivity issues.
+
+Examples:
+  vpn diagnose              # Run all diagnostics
+  vpn diagnose --verbose    # Show detailed output
+  vpn diagnose --json       # Output as JSON for scripting`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			results := runDiagnostics(nodeAddr, verbose)
+
+			if outputJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(results)
+			}
+
+			printDiagnostics(results, verbose)
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed output")
+
+	return cmd
+}
+
+// DiagnosticResult holds the result of a single diagnostic check.
+type DiagnosticResult struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"` // "pass", "fail", "warn"
+	Message string `json:"message"`
+	Details string `json:"details,omitempty"`
+}
+
+// DiagnosticsReport holds all diagnostic results.
+type DiagnosticsReport struct {
+	Timestamp   string             `json:"timestamp"`
+	NodeAddress string             `json:"node_address"`
+	Checks      []DiagnosticResult `json:"checks"`
+	Summary     struct {
+		Passed int `json:"passed"`
+		Failed int `json:"failed"`
+		Warned int `json:"warned"`
+	} `json:"summary"`
+}
+
+func runDiagnostics(nodeAddr string, verbose bool) *DiagnosticsReport {
+	report := &DiagnosticsReport{
+		Timestamp:   time.Now().Format(time.RFC3339),
+		NodeAddress: nodeAddr,
+		Checks:      []DiagnosticResult{},
+	}
+
+	// Check 1: Local node status
+	report.Checks = append(report.Checks, checkLocalNode(nodeAddr))
+
+	// Check 2: VPN server reachability
+	report.Checks = append(report.Checks, checkServerPing())
+
+	// Check 3: Peer discovery
+	report.Checks = append(report.Checks, checkPeers(nodeAddr))
+
+	// Check 4: Routing verification
+	report.Checks = append(report.Checks, checkRouting())
+
+	// Check 5: DNS resolution
+	report.Checks = append(report.Checks, checkDNS())
+
+	// Check 6: Network interface
+	report.Checks = append(report.Checks, checkNetworkInterface())
+
+	// Check 7: Internet connectivity
+	report.Checks = append(report.Checks, checkInternet())
+
+	// Calculate summary
+	for _, check := range report.Checks {
+		switch check.Status {
+		case "pass":
+			report.Summary.Passed++
+		case "fail":
+			report.Summary.Failed++
+		case "warn":
+			report.Summary.Warned++
+		}
+	}
+
+	return report
+}
+
+func checkLocalNode(nodeAddr string) DiagnosticResult {
+	result := DiagnosticResult{Name: "Local VPN Node"}
+
+	client, err := cli.NewClient(nodeAddr)
+	if err != nil {
+		result.Status = "fail"
+		result.Message = "Cannot connect to local node"
+		result.Details = err.Error()
+		return result
+	}
+	defer client.Close()
+
+	status, err := client.Status()
+	if err != nil {
+		result.Status = "fail"
+		result.Message = "Failed to get node status"
+		result.Details = err.Error()
+		return result
+	}
+
+	result.Status = "pass"
+	result.Message = fmt.Sprintf("%s (v%s) - VPN IP: %s", status.NodeName, status.Version, status.VPNAddress)
+	result.Details = fmt.Sprintf("Uptime: %s, Peers: %d, Traffic In: %s, Out: %s",
+		status.UptimeStr, status.PeerCount,
+		formatBytes(status.BytesIn), formatBytes(status.BytesOut))
+
+	return result
+}
+
+func checkServerPing() DiagnosticResult {
+	result := DiagnosticResult{Name: "VPN Server (10.8.0.1)"}
+
+	out, err := exec.Command("ping", "-c", "2", "-W", "3", "10.8.0.1").CombinedOutput()
+	if err != nil {
+		result.Status = "fail"
+		result.Message = "Server unreachable"
+		result.Details = "Ping failed - VPN tunnel may be down"
+		return result
+	}
+
+	// Extract latency
+	output := string(out)
+	if strings.Contains(output, "time=") {
+		parts := strings.Split(output, "time=")
+		if len(parts) > 1 {
+			timePart := strings.Split(parts[1], " ")[0]
+			result.Details = fmt.Sprintf("Latency: %s ms", timePart)
+		}
+	}
+
+	result.Status = "pass"
+	result.Message = "Server reachable"
+	return result
+}
+
+func checkPeers(nodeAddr string) DiagnosticResult {
+	result := DiagnosticResult{Name: "Peer Discovery"}
+
+	client, err := cli.NewClient(nodeAddr)
+	if err != nil {
+		result.Status = "fail"
+		result.Message = "Cannot connect to node"
+		return result
+	}
+	defer client.Close()
+
+	peers, err := client.NetworkPeers()
+	if err != nil {
+		result.Status = "warn"
+		result.Message = "Could not get peer list"
+		result.Details = err.Error()
+		return result
+	}
+
+	if len(peers.Peers) == 0 {
+		result.Status = "warn"
+		result.Message = "No peers discovered"
+		result.Details = "Peer list may not have been received yet"
+		return result
+	}
+
+	result.Status = "pass"
+	result.Message = fmt.Sprintf("%d peers discovered", len(peers.Peers))
+
+	// Build peer list details
+	var peerNames []string
+	for _, p := range peers.Peers {
+		peerNames = append(peerNames, fmt.Sprintf("%s (%s)", p.Name, p.VPNAddress))
+	}
+	result.Details = strings.Join(peerNames, ", ")
+
+	return result
+}
+
+func checkRouting() DiagnosticResult {
+	result := DiagnosticResult{Name: "Traffic Routing"}
+
+	publicIP, err := getPublicIP()
+	if err != nil {
+		result.Status = "warn"
+		result.Message = "Could not determine public IP"
+		result.Details = err.Error()
+		return result
+	}
+
+	// Check if routed through VPN server
+	expectedIP := "95.217.238.72" // Helsinki server
+	if publicIP == expectedIP {
+		result.Status = "pass"
+		result.Message = "Traffic routed through VPN"
+		result.Details = fmt.Sprintf("Public IP: %s (Helsinki)", publicIP)
+	} else {
+		result.Status = "warn"
+		result.Message = "Traffic NOT routed through VPN"
+		result.Details = fmt.Sprintf("Public IP: %s (expected: %s)", publicIP, expectedIP)
+	}
+
+	return result
+}
+
+func checkDNS() DiagnosticResult {
+	result := DiagnosticResult{Name: "DNS Resolution"}
+
+	start := time.Now()
+	out, err := exec.Command("nslookup", "google.com").CombinedOutput()
+	elapsed := time.Since(start)
+
+	if err != nil {
+		result.Status = "fail"
+		result.Message = "DNS resolution failed"
+		result.Details = string(out)
+		return result
+	}
+
+	result.Status = "pass"
+	result.Message = "DNS working"
+	result.Details = fmt.Sprintf("Resolution time: %v", elapsed.Round(time.Millisecond))
+	return result
+}
+
+func checkNetworkInterface() DiagnosticResult {
+	result := DiagnosticResult{Name: "VPN Interface"}
+
+	var tunName string
+	if runtime.GOOS == "darwin" {
+		// macOS uses utun devices
+		out, err := exec.Command("sh", "-c", "ifconfig | grep -E '^utun' | head -1 | cut -d: -f1").CombinedOutput()
+		if err == nil && len(out) > 0 {
+			tunName = strings.TrimSpace(string(out))
+		}
+	} else {
+		// Linux uses tun0
+		tunName = "tun0"
+	}
+
+	if tunName == "" {
+		result.Status = "fail"
+		result.Message = "No VPN interface found"
+		return result
+	}
+
+	// Check if interface is up
+	out, err := exec.Command("ifconfig", tunName).CombinedOutput()
+	if err != nil {
+		result.Status = "fail"
+		result.Message = fmt.Sprintf("Interface %s not found", tunName)
+		result.Details = err.Error()
+		return result
+	}
+
+	output := string(out)
+	if strings.Contains(output, "UP") {
+		result.Status = "pass"
+		result.Message = fmt.Sprintf("Interface %s is UP", tunName)
+
+		// Extract IP if present
+		if strings.Contains(output, "inet ") {
+			lines := strings.Split(output, "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "inet ") && strings.Contains(line, "10.8.0") {
+					parts := strings.Fields(line)
+					if len(parts) >= 2 {
+						result.Details = fmt.Sprintf("IP: %s", parts[1])
+					}
+				}
+			}
+		}
+	} else {
+		result.Status = "fail"
+		result.Message = fmt.Sprintf("Interface %s is DOWN", tunName)
+	}
+
+	return result
+}
+
+func checkInternet() DiagnosticResult {
+	result := DiagnosticResult{Name: "Internet Connectivity"}
+
+	// Try to reach a reliable external host
+	start := time.Now()
+	resp, err := http.Get("https://www.google.com")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		result.Status = "fail"
+		result.Message = "No internet connectivity"
+		result.Details = err.Error()
+		return result
+	}
+	resp.Body.Close()
+
+	result.Status = "pass"
+	result.Message = "Internet reachable"
+	result.Details = fmt.Sprintf("Response time: %v", elapsed.Round(time.Millisecond))
+	return result
+}
+
+func printDiagnostics(report *DiagnosticsReport, verbose bool) {
+	fmt.Println()
+	fmt.Println(colorBlue + "VPN Connectivity Diagnostics" + colorReset)
+	fmt.Println("═══════════════════════════════════════════════════════════════")
+	fmt.Printf("Timestamp: %s\n", report.Timestamp)
+	fmt.Printf("Node:      %s\n", report.NodeAddress)
+	fmt.Println("───────────────────────────────────────────────────────────────")
+	fmt.Println()
+
+	for _, check := range report.Checks {
+		var statusIcon, statusColor string
+		switch check.Status {
+		case "pass":
+			statusIcon = "[PASS]"
+			statusColor = colorGreen
+		case "fail":
+			statusIcon = "[FAIL]"
+			statusColor = colorRed
+		case "warn":
+			statusIcon = "[WARN]"
+			statusColor = colorYellow
+		}
+
+		fmt.Printf("%s%-6s%s %-20s %s\n", statusColor, statusIcon, colorReset, check.Name, check.Message)
+
+		if verbose && check.Details != "" {
+			fmt.Printf("       %s%s%s\n", colorGray, check.Details, colorReset)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("───────────────────────────────────────────────────────────────")
+	fmt.Printf("Summary: %s%d passed%s, ", colorGreen, report.Summary.Passed, colorReset)
+	if report.Summary.Failed > 0 {
+		fmt.Printf("%s%d failed%s, ", colorRed, report.Summary.Failed, colorReset)
+	} else {
+		fmt.Printf("0 failed, ")
+	}
+	if report.Summary.Warned > 0 {
+		fmt.Printf("%s%d warnings%s\n", colorYellow, report.Summary.Warned, colorReset)
+	} else {
+		fmt.Printf("0 warnings\n")
+	}
+	fmt.Println()
+
+	// Print recommendations if there are failures
+	if report.Summary.Failed > 0 {
+		fmt.Println(colorYellow + "Recommendations:" + colorReset)
+		for _, check := range report.Checks {
+			if check.Status == "fail" {
+				switch check.Name {
+				case "Local VPN Node":
+					fmt.Println("  - Check if vpn-node daemon is running: ps aux | grep vpn-node")
+					fmt.Println("  - Restart the VPN service: sudo launchctl bootout/bootstrap")
+				case "VPN Server (10.8.0.1)":
+					fmt.Println("  - VPN server may be down - check server status")
+					fmt.Println("  - Restart local VPN client to reconnect")
+				case "VPN Interface":
+					fmt.Println("  - VPN tunnel not established - restart VPN client")
+				case "Internet Connectivity":
+					fmt.Println("  - Check if route-all is enabled but VPN is disconnected")
+					fmt.Println("  - Try: vpn disconnect to restore direct routing")
+				case "DNS Resolution":
+					fmt.Println("  - DNS may be misconfigured - check /etc/resolv.conf")
+					fmt.Println("  - Try flushing DNS: sudo dscacheutil -flushcache")
+				}
+			}
+		}
+		fmt.Println()
+	}
+}
