@@ -1247,7 +1247,27 @@ main() {
     verify_connection
     send_handshake
     show_instructions
+    run_validation
     open_browser
+}
+
+# Run system health validation and save report
+run_validation() {
+    print_step "Running system health validation..."
+
+    # Give services a moment to stabilize
+    sleep 3
+
+    if [[ -x "$INSTALL_DIR/scripts/validate.sh" ]]; then
+        echo ""
+        echo "════════════════════════════════════════════════════════════════"
+        "$INSTALL_DIR/scripts/validate.sh"
+        echo "════════════════════════════════════════════════════════════════"
+        echo ""
+        print_success "Health report saved to $INSTALL_DIR/HEALTH_REPORT.md"
+    else
+        print_warning "Validation script not found"
+    fi
 }
 
 # Run main
