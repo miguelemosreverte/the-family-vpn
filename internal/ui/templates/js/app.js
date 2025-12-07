@@ -124,21 +124,20 @@
 
                 container.innerHTML = peers.map(peer => {
                     const isUs = peer.vpn_address === myVpnAddr;
-                    const osBadge = peer.os ? ` + "`" + `<span class="os-badge">${peer.os}</span>` + "`" + ` : '';
+                    const osBadge = peer.os ? `<span class="os-badge">${peer.os}</span>` : '';
                     const youBadge = isUs ? '<span class="you-badge">YOU</span>' : '';
 
                     // SSH command - uses VPN internal IP
                     // For server (linux), use root@. For clients (darwin), use miguel_lemos (family default)
                     const sshUser = peer.os === 'linux' ? 'root' : 'miguel_lemos';
                     const sshTarget = peer.vpn_address;
-                    const sshCmd = ` + "`" + `ssh ${sshUser}@${sshTarget}` + "`" + `;
+                    const sshCmd = `ssh ${sshUser}@${sshTarget}`;
 
                     // Disable SSH button for ourselves
                     const sshBtnClass = isUs ? 'ssh-btn disabled' : 'ssh-btn';
-                    const sshBtnOnClick = isUs ? '' : ` + "`" + `onclick="openSSHTerminal('${peer.name || 'Unknown'}', '${sshCmd}')"` + "`" + `;
+                    const sshBtnOnClick = isUs ? '' : `onclick="openSSHTerminal('${peer.name || 'Unknown'}', '${sshCmd}')"`;
 
-                    return ` + "`" + 
-                        <div class="peer-card ${isUs ? 'is-self' : ''}">
+                    return `                        <div class="peer-card ${isUs ? 'is-self' : ''}">
                             <div class="peer-card-header">
                                 <div class="peer-card-avatar">${(peer.name || 'U')[0].toUpperCase()}</div>
                                 <div class="peer-card-info">
@@ -162,7 +161,7 @@
                                 </button>
                             </div>
                         </div>
-                    ` + "`" + `;
+                    `;
                 }).join('');
             } catch (err) {
                 console.error('Failed to load network peers:', err);
@@ -191,15 +190,13 @@
                 tbody.innerHTML = entries.map(entry => {
                     const ts = new Date(entry.timestamp).toLocaleString();
                     const pingBadge = entry.ping_test_ok
-                        ? ` + "`" + `<span style="color: var(--success);">${entry.ping_test_ms}ms</span>` + "`" + 
-                        : '<span style="color: var(--error);">FAIL</span>';
+                        ? `<span style="color: var(--success);">${entry.ping_test_ms}ms</span>`                        : '<span style="color: var(--error);">FAIL</span>';
                     const sshBadge = entry.ssh_test_ok
                         ? '<span style="color: var(--success);">OK</span>'
                         : '<span style="color: var(--error);">FAIL</span>';
                     const osDisplay = entry.os + '/' + entry.arch;
 
-                    return ` + "`" + 
-                        <tr>
+                    return `                        <tr>
                             <td>${ts}</td>
                             <td>${entry.node_name || '-'}</td>
                             <td>${entry.vpn_address || '-'}</td>
@@ -209,7 +206,7 @@
                             <td>${pingBadge}</td>
                             <td>${sshBadge}</td>
                         </tr>
-                    ` + "`" + `;
+                    `;
                 }).join('');
             } catch (err) {
                 console.error('Failed to load handshakes:', err);
@@ -223,8 +220,7 @@
                 // Show brief notification
                 const notification = document.createElement('div');
                 notification.textContent = 'SSH command copied! Password: osopanda';
-                notification.style.cssText = ` + "`" + 
-                    position: fixed;
+                notification.style.cssText = `                    position: fixed;
                     bottom: 20px;
                     right: 20px;
                     background: var(--success);
@@ -234,7 +230,7 @@
                     font-size: 14px;
                     z-index: 1000;
                     animation: fadeIn 0.3s ease;
-                ` + "`" + `;
+                `;
                 document.body.appendChild(notification);
                 setTimeout(() => notification.remove(), 3000);
             }).catch(err => {
@@ -493,8 +489,7 @@
                 // Render peers table from topology
                 const tbody = document.getElementById('peers-tbody');
                 if (isVPNActive && networkNodes.length > 0) {
-                    tbody.innerHTML = networkNodes.map(p => ` + "`" + 
-                        <tr>
+                    tbody.innerHTML = networkNodes.map(p => `                        <tr>
                             <td>
                                 <div class="peer-name">
                                     <div class="peer-avatar">${(p.name || 'U')[0].toUpperCase()}</div>
@@ -505,12 +500,12 @@
                             <td>${p.public_addr || '-'}</td>
                             <td>${p.connected_at ? new Date(p.connected_at).toLocaleString() : '-'}</td>
                         </tr>
-                    ` + "`" + `).join('');
+                    `).join('');
                 } else {
                     const message = isVPNActive
                         ? 'No other peers in network'
                         : 'VPN routing disabled - enable to see peers';
-                    tbody.innerHTML = ` + "`" + `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary)">${message}</td></tr>` + "`" + `;
+                    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary)">${message}</td></tr>`;
                 }
 
                 // Load bandwidth chart (only meaningful when VPN is active)
@@ -524,7 +519,7 @@
         async function loadBandwidthChart() {
             try {
                 // Don't filter by specific metrics - get all and find the bandwidth ones
-                const res = await fetch(` + "`" + `/api/stats?earliest=${currentBandwidthRange}&granularity=raw` + "`" + `);
+                const res = await fetch(`/api/stats?earliest=${currentBandwidthRange}&granularity=raw`);
                 const data = await res.json();
 
                 const ctx = document.getElementById('bandwidth-chart').getContext('2d');
@@ -617,7 +612,7 @@
 
                     const option = document.createElement('option');
                     option.value = vpnAddr; // VPN address for remote connection
-                    option.textContent = ` + "`" + `${name} (${vpnAddr})` + "`" + `;
+                    option.textContent = `${name} (${vpnAddr})`;
                     select.appendChild(option);
                 });
             } catch (err) {
@@ -628,7 +623,7 @@
         // Load metrics charts
         async function loadMetricsCharts() {
             try {
-                const res = await fetch(` + "`" + `/api/stats?earliest=${currentMetricsRange}&granularity=raw` + "`" + `);
+                const res = await fetch(`/api/stats?earliest=${currentMetricsRange}&granularity=raw`);
                 const data = await res.json();
 
                 // Obs Bandwidth chart
@@ -746,11 +741,11 @@
             // Build the API URL
             // If peerFilter is set, it contains the VPN address of the remote peer
             // The backend will connect to that peer's control socket to fetch their logs
-            let url = ` + "`" + `/api/logs?earliest=${currentLogRange}` + "`" + `;
-            if (peerFilter) url += ` + "`" + `&peer=${encodeURIComponent(peerFilter)}` + "`" + `;
-            if (search) url += ` + "`" + `&search=${encodeURIComponent(search)}` + "`" + `;
-            if (level) url += ` + "`" + `&level=${level}` + "`" + `;
-            if (component) url += ` + "`" + `&component=${component}` + "`" + `;
+            let url = `/api/logs?earliest=${currentLogRange}`;
+            if (peerFilter) url += `&peer=${encodeURIComponent(peerFilter)}`;
+            if (search) url += `&search=${encodeURIComponent(search)}`;
+            if (level) url += `&level=${level}`;
+            if (component) url += `&component=${component}`;
 
             try {
                 const res = await fetch(url);
@@ -760,17 +755,16 @@
                 const entries = data.entries || [];
 
                 if (entries.length > 0) {
-                    container.innerHTML = entries.map(e => ` + "`" + 
-                        <div class="log-entry">
+                    container.innerHTML = entries.map(e => `                        <div class="log-entry">
                             <span class="log-time">${e.timestamp?.substring(0, 19) || ''}</span>
                             <span class="log-level ${e.level}">${e.level}</span>
                             <span class="log-component">[${e.component}]</span>
                             <span class="log-message">${escapeHtml(e.message)}</span>
                         </div>
-                    ` + "`" + `).join('');
+                    `).join('');
                 } else {
                     const peerMsg = peerFilter ? ' from remote peer (may be unreachable)' : '';
-                    container.innerHTML = ` + "`" + `<div class="empty-state"><p>No logs found${peerMsg}</p></div>` + "`" + `;
+                    container.innerHTML = `<div class="empty-state"><p>No logs found${peerMsg}</p></div>`;
                 }
             } catch (err) {
                 console.error('Failed to load logs:', err);
@@ -829,7 +823,7 @@
                 // Update node count with VPN status
                 const statusText = isVPNActive ? '' : ' (VPN routing disabled)';
                 document.getElementById('topology-node-count').textContent =
-                    ` + "`" + `${(data.nodes || []).length} nodes, ${(data.edges || []).length} connections${statusText}` + "`" + `;
+                    `${(data.nodes || []).length} nodes, ${(data.edges || []).length} connections${statusText}`;
             } catch (err) {
                 console.error('Failed to load topology:', err);
                 document.getElementById('all-peers-tbody').innerHTML =
@@ -845,7 +839,7 @@
         // Helper to create a location key for grouping nodes
         function locationKey(lat, lon) {
             // Round to 2 decimal places (~1km precision) for grouping nearby nodes
-            return ` + "`" + `${lat.toFixed(2)},${lon.toFixed(2)}` + "`" + `;
+            return `${lat.toFixed(2)},${lon.toFixed(2)}`;
         }
 
         // Helper to check if a node is "us" (the viewing node)
@@ -935,15 +929,15 @@
 
                 // Build popup content showing all nodes at this location
                 const location = groupNodes[0].geo
-                    ? ` + "`" + `${groupNodes[0].geo.city || ''}, ${groupNodes[0].geo.country || ''}` + "`" + `.replace(/^, |, $/g, '')
+                    ? `${groupNodes[0].geo.city || ''}, ${groupNodes[0].geo.country || ''}`.replace(/^, |, $/g, '')
                     : 'Unknown';
 
-                let popupContent = ` + "`" + `<div class="node-popup">` + "`" + `;
+                let popupContent = `<div class="node-popup">`;
 
                 if (nodeCount > 1) {
-                    popupContent += ` + "`" + `<div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                    popupContent += `<div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
                         ${nodeCount} nodes at ${location}
-                    </div>` + "`" + `;
+                    </div>`;
                 }
 
                 // List all nodes at this location
@@ -954,11 +948,10 @@
                     const youBadge = isUs ? '<span class="you-badge">YOU</span>' : '';
 
                     if (idx > 0) {
-                        popupContent += ` + "`" + `<div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>` + "`" + `;
+                        popupContent += `<div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>`;
                     }
 
-                    popupContent += ` + "`" + 
-                        <div class="node-popup-name">
+                    popupContent += `                        <div class="node-popup-name">
                             ${icon} ${n.name || 'Unknown'} ${youBadge}
                         </div>
                         <div class="node-popup-info">
@@ -968,10 +961,10 @@
                             ${n.latency_ms ? '<strong>Latency:</strong> ' + n.latency_ms.toFixed(1) + ' ms<br>' : ''}
                             ${n.geo?.isp ? '<strong>ISP:</strong> ' + n.geo.isp + '<br>' : ''}
                         </div>
-                    ` + "`" + `;
+                    `;
                 });
 
-                popupContent += ` + "`" + `</div>` + "`" + `;
+                popupContent += `</div>`;
 
                 marker.bindPopup(popupContent);
                 marker.addTo(networkMap);
@@ -1094,21 +1087,20 @@
                 tbody.innerHTML = sorted.map(n => {
                     // Use isOurNode for correct "YOU" identification based on myVpnAddr
                     const isUs = isOurNode(n);
-                    const distanceClass = ` + "`" + `distance-${Math.min(n.distance || 0, 3)}` + "`" + `;
+                    const distanceClass = `distance-${Math.min(n.distance || 0, 3)}`;
                     const distanceLabel = isUs ? 'You' :
                                           n.distance === 1 ? '1 hop' :
-                                          ` + "`" + `${n.distance} hops` + "`" + `;
+                                          `${n.distance} hops`;
                     const selfBadge = isUs ? '<span class="self-indicator">YOU</span>' : '';
                     const statusColor = isUs || n.is_direct ? 'var(--success)' : 'var(--text-secondary)';
                     const statusText = isUs ? 'Local' : (n.is_direct ? 'Direct' : 'Via Relay');
 
                     // SSH command - uses VPN internal IP, root for linux, miguel_lemos for darwin
                     const sshUser = n.os === 'linux' ? 'root' : 'miguel_lemos';
-                    const sshCmd = ` + "`" + `ssh ${sshUser}@${n.vpn_address}` + "`" + `;
+                    const sshCmd = `ssh ${sshUser}@${n.vpn_address}`;
                     const sshDisabled = isUs;
 
-                    return ` + "`" + 
-                        <tr>
+                    return `                        <tr>
                             <td><span class="distance-badge ${distanceClass}">${distanceLabel}</span></td>
                             <td>
                                 <div class="peer-name">
@@ -1122,8 +1114,7 @@
                             <td>${n.bandwidth_bps ? formatBytes(n.bandwidth_bps) + '/s' : '-'}</td>
                             <td style="color: ${statusColor}">${statusText}</td>
                             <td class="ssh-cell">
-                                ${sshDisabled ? '<span style="color: var(--text-secondary)">-</span>' : ` + "`" + 
-                                    <button class="ssh-table-btn" onclick="openSSHTerminal('${n.name || 'Unknown'}', '${sshCmd}')" title="Open SSH terminal">
+                                ${sshDisabled ? '<span style="color: var(--text-secondary)">-</span>' : `                                    <button class="ssh-table-btn" onclick="openSSHTerminal('${n.name || 'Unknown'}', '${sshCmd}')" title="Open SSH terminal">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <rect x="2" y="3" width="20" height="18" rx="2"/>
                                             <path d="M7 8l4 4-4 4"/>
@@ -1131,21 +1122,20 @@
                                         </svg>
                                     </button>
                                     <code class="ssh-cmd" onclick="copySSHCommand('${sshCmd}')" title="Click to copy">${sshCmd}</code>
-                                ` + "`" + `}
+                                `}
                             </td>
                             <td class="screen-cell">
-                                ${(sshDisabled || n.os === 'linux') ? '<span style="color: var(--text-secondary)">-</span>' : ` + "`" + 
-                                    <button class="screen-table-btn" onclick="openScreenShare('${n.vpn_address}', '${sshUser}')" title="Open Screen Sharing (VNC)">
+                                ${(sshDisabled || n.os === 'linux') ? '<span style="color: var(--text-secondary)">-</span>' : `                                    <button class="screen-table-btn" onclick="openScreenShare('${n.vpn_address}', '${sshUser}')" title="Open Screen Sharing (VNC)">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                             <rect x="2" y="3" width="20" height="14" rx="2"/>
                                             <line x1="8" y1="21" x2="16" y2="21"/>
                                             <line x1="12" y1="17" x2="12" y2="21"/>
                                         </svg>
                                     </button>
-                                ` + "`" + `}
+                                `}
                             </td>
                         </tr>
-                    ` + "`" + `;
+                    `;
                 }).join('');
             } else {
                 tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-secondary)">No nodes in network</td></tr>';
@@ -1336,7 +1326,7 @@
                 // Toggle based on current actual state (both connected AND route_all)
                 const currentlyActive = vpnConnected && vpnRouteAllEnabled;
                 const action = currentlyActive ? 'disconnect' : 'connect';
-                const res = await fetch(` + "`" + `/api/connection?action=${action}` + "`" + `, {
+                const res = await fetch(`/api/connection?action=${action}`, {
                     method: 'POST'
                 });
 
@@ -1430,17 +1420,15 @@
         // Show a notification when update is detected
         function showUpdateNotification(oldVersion, newVersion) {
             const notification = document.createElement('div');
-            notification.innerHTML = ` + "`" + 
-                <div style="display: flex; align-items: center; gap: 12px;">
+            notification.innerHTML = `                <div style="display: flex; align-items: center; gap: 12px;">
                     <span style="font-size: 24px;">🚀</span>
                     <div>
                         <div style="font-weight: 600;">New Version Deployed!</div>
                         <div style="font-size: 12px; opacity: 0.8;">v${oldVersion} → v${newVersion}</div>
                     </div>
                 </div>
-            ` + "`" + `;
-            notification.style.cssText = ` + "`" + 
-                position: fixed;
+            `;
+            notification.style.cssText = `                position: fixed;
                 top: 20px;
                 right: 20px;
                 background: linear-gradient(135deg, #3b82f6, #8b5cf6);
@@ -1451,16 +1439,15 @@
                 z-index: 10000;
                 box-shadow: 0 10px 40px rgba(59, 130, 246, 0.4);
                 animation: slideIn 0.3s ease-out;
-            ` + "`" + `;
+            `;
 
             // Add animation keyframes
             const style = document.createElement('style');
-            style.textContent = ` + "`" + 
-                @keyframes slideIn {
+            style.textContent = `                @keyframes slideIn {
                     from { transform: translateX(100%); opacity: 0; }
                     to { transform: translateX(0); opacity: 1; }
                 }
-            ` + "`" + `;
+            `;
             document.head.appendChild(style);
             document.body.appendChild(notification);
         }

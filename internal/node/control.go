@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/miguelemosreverte/vpn/internal/cli"
 	"github.com/miguelemosreverte/vpn/internal/protocol"
 	"github.com/miguelemosreverte/vpn/internal/store"
 )
@@ -657,12 +658,9 @@ func (d *Daemon) handleHandshake(enc *json.Encoder, req *protocol.Request) {
 }
 
 // handleHandshakeHistory returns the history of install handshakes.
+// In client mode, this proxies the request to the server (10.8.0.1:9001)
+// since handshakes are stored centrally on the server.
 func (d *Daemon) handleHandshakeHistory(enc *json.Encoder, req *protocol.Request) {
-	if d.store == nil {
-		d.sendError(enc, req.ID, protocol.ErrCodeInternal, "storage not initialized")
-		return
-	}
-
 	var params protocol.HandshakeHistoryParams
 	if req.Params != nil {
 		if err := json.Unmarshal(req.Params, &params); err != nil {
@@ -673,6 +671,36 @@ func (d *Daemon) handleHandshakeHistory(enc *json.Encoder, req *protocol.Request
 
 	if params.Limit <= 0 {
 		params.Limit = 100
+	}
+
+	// In client mode, proxy the request to the server
+	if !d.config.ServerMode {
+		serverAddr := "10.8.0.1:9001"
+		client, err := cli.NewClient(serverAddr)
+		if err != nil {
+			// Return empty result if can't reach server
+			d.sendResult(enc, req.ID, protocol.HandshakeHistoryResult{
+				Entries: []protocol.HandshakeEntry{},
+				Total:   0,
+			})
+			return
+		}
+		defer client.Close()
+
+		history, err := client.HandshakeHistory(params.NodeName, params.Limit)
+		if err != nil {
+			d.sendError(enc, req.ID, protocol.ErrCodeInternal, fmt.Sprintf("server query failed: %v", err))
+			return
+		}
+
+		d.sendResult(enc, req.ID, *history)
+		return
+	}
+
+	// Server mode: query local store
+	if d.store == nil {
+		d.sendError(enc, req.ID, protocol.ErrCodeInternal, "storage not initialized")
+		return
 	}
 
 	records, total, err := d.store.GetHandshakeHistory(params.NodeName, params.Limit)
