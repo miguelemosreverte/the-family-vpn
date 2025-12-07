@@ -33,7 +33,7 @@ The CLI (`vpn` binary) is used to interact with the VPN node daemon. Updates to 
 
 ## Diagnostics
 
-The `diagnose` command runs comprehensive connectivity checks:
+The `diagnose` command runs comprehensive connectivity checks and displays results in two sections: **This Node** (local checks) and **Network Peers** (per-peer diagnostics).
 
 ```bash
 vpn diagnose           # Run all diagnostics
@@ -41,29 +41,67 @@ vpn diagnose -v        # Verbose output with details
 vpn diagnose --json    # JSON output for scripting
 ```
 
-Checks performed:
+### This Node Checks
+
 1. **Local VPN Node** - Is the daemon running and responding?
 2. **VPN Server** - Can we ping 10.8.0.1?
-3. **Peer Discovery** - Are we receiving peer lists?
-4. **Traffic Routing** - Is traffic routed through VPN?
-5. **DNS Resolution** - Is DNS working?
-6. **VPN Interface** - Is the TUN interface up?
-7. **Internet Connectivity** - Can we reach external hosts?
+3. **Traffic Routing** - Is traffic routed through VPN?
+4. **DNS Resolution** - Is DNS working?
+5. **VPN Interface** - Is the TUN interface up?
+6. **Internet Connectivity** - Can we reach external hosts?
+7. **SSH Access** - Is Remote Login (SSH) enabled?
+
+### Network Peers Checks
+
+For each discovered peer:
+- **Reachability** - Can we ping the peer's VPN IP?
+- **Version** - What version is the peer running? (warns on mismatch)
+- **Routing** - Is the peer routing through VPN? (warns if direct)
+- **SSH Access** - Is SSH port 22 accessible?
 
 Example output:
 ```
 VPN Connectivity Diagnostics
 ═══════════════════════════════════════════════════════════════
-[PASS] Local VPN Node       miguels-macbook-air (vfed3efc) - VPN IP: 10.8.0.2
+Timestamp: 2025-12-07T20:28:11Z
+
+This Node
+───────────────────────────────────────────────────────────────
+  Name:    miguels-macbook-air-local
+  Version: fed3efc
+  VPN IP:  10.8.0.2
+
+[PASS] Local VPN Node       miguels-macbook-air-local (vfed3efc) - VPN IP: 10.8.0.2
 [PASS] VPN Server (10.8.0.1) Server reachable
-[PASS] Peer Discovery       3 peers discovered
 [PASS] Traffic Routing      Traffic routed through VPN
 [PASS] DNS Resolution       DNS working
 [PASS] VPN Interface        Interface utun0 is UP
 [PASS] Internet Connectivity Internet reachable
+[PASS] SSH Access           SSH enabled
 
-Summary: 7 passed, 0 failed, 0 warnings
+Network Peers
+───────────────────────────────────────────────────────────────
+[PASS] Helsinki (10.8.0.1)
+         OS: linux
+         Routing: VPN (IP: 95.217.238.72)
+         SSH: Accessible
+
+[PASS] miguel-lemoss-Mac-mini.local (10.8.0.3)
+         Version: fed3efc
+         OS: darwin
+         Routing: VPN (IP: 95.217.238.72)
+         SSH: Accessible
+
+───────────────────────────────────────────────────────────────
+Summary: 9 passed, 0 failed, 0 warnings
 ```
+
+### Warnings
+
+The diagnose command shows warnings for:
+- **Version mismatch** - Peer running a different version than local node
+- **Not routing through VPN** - Peer's traffic going direct instead of through VPN
+- **SSH not accessible** - Cannot reach SSH port 22 on peer
 
 ## Deployment
 

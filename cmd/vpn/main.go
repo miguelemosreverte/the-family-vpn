@@ -584,6 +584,7 @@ const (
 	colorGreen  = "\033[32m"
 	colorYellow = "\033[33m"
 	colorBlue   = "\033[34m"
+	colorCyan   = "\033[36m"
 	colorGray   = "\033[90m"
 )
 
@@ -1538,12 +1539,38 @@ type DiagnosticResult struct {
 	Details string `json:"details,omitempty"`
 }
 
+// PeerDiagnostic holds diagnostic results for a single peer.
+type PeerDiagnostic struct {
+	Name       string `json:"name"`
+	VPNAddress string `json:"vpn_address"`
+	Version    string `json:"version"`
+	OS         string `json:"os"`
+	// Status checks
+	Reachable       bool   `json:"reachable"`        // Can ping the peer
+	VersionMatch    bool   `json:"version_match"`    // Version matches local node
+	RoutingVPN      bool   `json:"routing_vpn"`      // Traffic routed through VPN
+	SSHAccessible   bool   `json:"ssh_accessible"`   // SSH port 22 accessible
+	PublicIP        string `json:"public_ip"`        // Peer's public IP
+	VersionWarning  string `json:"version_warning,omitempty"`
+	RoutingWarning  string `json:"routing_warning,omitempty"`
+	SSHWarning      string `json:"ssh_warning,omitempty"`
+}
+
 // DiagnosticsReport holds all diagnostic results.
 type DiagnosticsReport struct {
 	Timestamp   string             `json:"timestamp"`
 	NodeAddress string             `json:"node_address"`
-	Checks      []DiagnosticResult `json:"checks"`
-	Summary     struct {
+	// This Node section
+	LocalNode struct {
+		Name       string             `json:"name"`
+		Version    string             `json:"version"`
+		VPNAddress string             `json:"vpn_address"`
+		Checks     []DiagnosticResult `json:"checks"`
+	} `json:"local_node"`
+	// Network Peers section
+	Peers []PeerDiagnostic `json:"peers"`
+	// Summary
+	Summary struct {
 		Passed int `json:"passed"`
 		Failed int `json:"failed"`
 		Warned int `json:"warned"`
@@ -1554,38 +1581,75 @@ func runDiagnostics(nodeAddr string, verbose bool) *DiagnosticsReport {
 	report := &DiagnosticsReport{
 		Timestamp:   time.Now().Format(time.RFC3339),
 		NodeAddress: nodeAddr,
-		Checks:      []DiagnosticResult{},
+		Peers:       []PeerDiagnostic{},
+	}
+	report.LocalNode.Checks = []DiagnosticResult{}
+
+	// Get local node info first
+	client, err := cli.NewClient(nodeAddr)
+	var localVersion string
+	if err == nil {
+		defer client.Close()
+		if status, err := client.Status(); err == nil {
+			report.LocalNode.Name = status.NodeName
+			report.LocalNode.Version = status.Version
+			report.LocalNode.VPNAddress = status.VPNAddress
+			localVersion = status.Version
+		}
 	}
 
+	// === THIS NODE CHECKS ===
 	// Check 1: Local node status
-	report.Checks = append(report.Checks, checkLocalNode(nodeAddr))
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkLocalNode(nodeAddr))
 
 	// Check 2: VPN server reachability
-	report.Checks = append(report.Checks, checkServerPing())
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkServerPing())
 
-	// Check 3: Peer discovery
-	report.Checks = append(report.Checks, checkPeers(nodeAddr))
+	// Check 3: Routing verification
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkRouting())
 
-	// Check 4: Routing verification
-	report.Checks = append(report.Checks, checkRouting())
+	// Check 4: DNS resolution
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkDNS())
 
-	// Check 5: DNS resolution
-	report.Checks = append(report.Checks, checkDNS())
+	// Check 5: Network interface
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkNetworkInterface())
 
-	// Check 6: Network interface
-	report.Checks = append(report.Checks, checkNetworkInterface())
+	// Check 6: Internet connectivity
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkInternet())
 
-	// Check 7: Internet connectivity
-	report.Checks = append(report.Checks, checkInternet())
+	// Check 7: SSH access (local)
+	report.LocalNode.Checks = append(report.LocalNode.Checks, checkLocalSSH())
 
-	// Calculate summary
-	for _, check := range report.Checks {
+	// === NETWORK PEERS ===
+	// Get peer list and run diagnostics for each
+	report.Peers = checkNetworkPeers(nodeAddr, localVersion)
+
+	// Calculate summary from local checks
+	for _, check := range report.LocalNode.Checks {
 		switch check.Status {
 		case "pass":
 			report.Summary.Passed++
 		case "fail":
 			report.Summary.Failed++
 		case "warn":
+			report.Summary.Warned++
+		}
+	}
+
+	// Add peer warnings to summary
+	for _, peer := range report.Peers {
+		if peer.Reachable {
+			report.Summary.Passed++
+		} else {
+			report.Summary.Failed++
+		}
+		if !peer.VersionMatch && peer.Version != "" {
+			report.Summary.Warned++
+		}
+		if !peer.RoutingVPN && peer.PublicIP != "" {
+			report.Summary.Warned++
+		}
+		if !peer.SSHAccessible {
 			report.Summary.Warned++
 		}
 	}
@@ -1648,43 +1712,106 @@ func checkServerPing() DiagnosticResult {
 	return result
 }
 
-func checkPeers(nodeAddr string) DiagnosticResult {
-	result := DiagnosticResult{Name: "Peer Discovery"}
+// checkLocalSSH checks if SSH access is enabled on this node.
+func checkLocalSSH() DiagnosticResult {
+	result := DiagnosticResult{Name: "SSH Access"}
 
-	client, err := cli.NewClient(nodeAddr)
-	if err != nil {
-		result.Status = "fail"
-		result.Message = "Cannot connect to node"
-		return result
-	}
-	defer client.Close()
-
-	peers, err := client.NetworkPeers()
-	if err != nil {
-		result.Status = "warn"
-		result.Message = "Could not get peer list"
-		result.Details = err.Error()
-		return result
+	// Check if sshd is running / port 22 is listening
+	var cmd *exec.Cmd
+	if runtime.GOOS == "darwin" {
+		// macOS: check systemsetup for remote login
+		cmd = exec.Command("sh", "-c", "systemsetup -getremotelogin 2>/dev/null | grep -i on")
+	} else {
+		// Linux: check if sshd is running
+		cmd = exec.Command("sh", "-c", "systemctl is-active sshd 2>/dev/null || pgrep sshd")
 	}
 
-	if len(peers.Peers) == 0 {
+	if err := cmd.Run(); err != nil {
 		result.Status = "warn"
-		result.Message = "No peers discovered"
-		result.Details = "Peer list may not have been received yet"
+		result.Message = "SSH not enabled"
+		result.Details = "Remote Login (SSH) is disabled on this node"
 		return result
 	}
 
 	result.Status = "pass"
-	result.Message = fmt.Sprintf("%d peers discovered", len(peers.Peers))
-
-	// Build peer list details
-	var peerNames []string
-	for _, p := range peers.Peers {
-		peerNames = append(peerNames, fmt.Sprintf("%s (%s)", p.Name, p.VPNAddress))
-	}
-	result.Details = strings.Join(peerNames, ", ")
-
+	result.Message = "SSH enabled"
+	result.Details = "Remote Login (SSH) is available"
 	return result
+}
+
+// checkNetworkPeers runs diagnostics for all network peers.
+func checkNetworkPeers(nodeAddr string, localVersion string) []PeerDiagnostic {
+	peers := []PeerDiagnostic{}
+
+	client, err := cli.NewClient(nodeAddr)
+	if err != nil {
+		return peers
+	}
+	defer client.Close()
+
+	// Get peer list from network
+	peerList, err := client.NetworkPeers()
+	if err != nil {
+		return peers
+	}
+
+	// Also get connected peers for more detailed info (version, etc.)
+	connectedPeers, _ := client.Peers()
+	peerVersions := make(map[string]string)
+	if connectedPeers != nil {
+		for _, p := range connectedPeers.Peers {
+			peerVersions[p.VPNAddress] = p.Version
+		}
+	}
+
+	expectedIP := "95.217.238.72" // Helsinki VPN server
+
+	for _, p := range peerList.Peers {
+		pd := PeerDiagnostic{
+			Name:       p.Name,
+			VPNAddress: p.VPNAddress,
+			OS:         p.OS,
+			PublicIP:   p.PublicIP,
+		}
+
+		// Get version from connected peers if available
+		if v, ok := peerVersions[p.VPNAddress]; ok {
+			pd.Version = v
+		}
+
+		// Check 1: Reachability (ping)
+		pingCmd := exec.Command("ping", "-c", "1", "-W", "2", p.VPNAddress)
+		pd.Reachable = pingCmd.Run() == nil
+
+		// Check 2: Version match
+		if pd.Version != "" && localVersion != "" {
+			pd.VersionMatch = pd.Version == localVersion
+			if !pd.VersionMatch {
+				pd.VersionWarning = fmt.Sprintf("Version mismatch: %s (local: %s)", pd.Version, localVersion)
+			}
+		} else {
+			pd.VersionMatch = true // Can't check, assume OK
+		}
+
+		// Check 3: VPN routing (based on public IP)
+		if p.PublicIP != "" {
+			pd.RoutingVPN = p.PublicIP == expectedIP
+			if !pd.RoutingVPN {
+				pd.RoutingWarning = fmt.Sprintf("Not routing through VPN (IP: %s)", p.PublicIP)
+			}
+		}
+
+		// Check 4: SSH accessibility (try to connect to port 22)
+		sshCheck := exec.Command("nc", "-z", "-w", "2", p.VPNAddress, "22")
+		pd.SSHAccessible = sshCheck.Run() == nil
+		if !pd.SSHAccessible {
+			pd.SSHWarning = "SSH port 22 not accessible"
+		}
+
+		peers = append(peers, pd)
+	}
+
+	return peers
 }
 
 func checkRouting() DiagnosticResult {
@@ -1815,31 +1942,37 @@ func printDiagnostics(report *DiagnosticsReport, verbose bool) {
 	fmt.Println(colorBlue + "VPN Connectivity Diagnostics" + colorReset)
 	fmt.Println("═══════════════════════════════════════════════════════════════")
 	fmt.Printf("Timestamp: %s\n", report.Timestamp)
-	fmt.Printf("Node:      %s\n", report.NodeAddress)
-	fmt.Println("───────────────────────────────────────────────────────────────")
 	fmt.Println()
 
-	for _, check := range report.Checks {
-		var statusIcon, statusColor string
-		switch check.Status {
-		case "pass":
-			statusIcon = "[PASS]"
-			statusColor = colorGreen
-		case "fail":
-			statusIcon = "[FAIL]"
-			statusColor = colorRed
-		case "warn":
-			statusIcon = "[WARN]"
-			statusColor = colorYellow
-		}
-
-		fmt.Printf("%s%-6s%s %-20s %s\n", statusColor, statusIcon, colorReset, check.Name, check.Message)
-
-		if verbose && check.Details != "" {
-			fmt.Printf("       %s%s%s\n", colorGray, check.Details, colorReset)
-		}
+	// === THIS NODE SECTION ===
+	fmt.Println(colorCyan + "This Node" + colorReset)
+	fmt.Println("───────────────────────────────────────────────────────────────")
+	if report.LocalNode.Name != "" {
+		fmt.Printf("  Name:    %s\n", report.LocalNode.Name)
+		fmt.Printf("  Version: %s\n", report.LocalNode.Version)
+		fmt.Printf("  VPN IP:  %s\n", report.LocalNode.VPNAddress)
+		fmt.Println()
 	}
 
+	for _, check := range report.LocalNode.Checks {
+		printCheck(check, verbose)
+	}
+
+	// === NETWORK PEERS SECTION ===
+	if len(report.Peers) > 0 {
+		fmt.Println()
+		fmt.Println(colorCyan + "Network Peers" + colorReset)
+		fmt.Println("───────────────────────────────────────────────────────────────")
+
+		for _, peer := range report.Peers {
+			printPeerDiagnostic(peer, verbose)
+		}
+	} else {
+		fmt.Println()
+		fmt.Printf("%s[WARN]%s No network peers discovered\n", colorYellow, colorReset)
+	}
+
+	// === SUMMARY ===
 	fmt.Println()
 	fmt.Println("───────────────────────────────────────────────────────────────")
 	fmt.Printf("Summary: %s%d passed%s, ", colorGreen, report.Summary.Passed, colorReset)
@@ -1858,26 +1991,114 @@ func printDiagnostics(report *DiagnosticsReport, verbose bool) {
 	// Print recommendations if there are failures
 	if report.Summary.Failed > 0 {
 		fmt.Println(colorYellow + "Recommendations:" + colorReset)
-		for _, check := range report.Checks {
+		for _, check := range report.LocalNode.Checks {
 			if check.Status == "fail" {
-				switch check.Name {
-				case "Local VPN Node":
-					fmt.Println("  - Check if vpn-node daemon is running: ps aux | grep vpn-node")
-					fmt.Println("  - Restart the VPN service: sudo launchctl bootout/bootstrap")
-				case "VPN Server (10.8.0.1)":
-					fmt.Println("  - VPN server may be down - check server status")
-					fmt.Println("  - Restart local VPN client to reconnect")
-				case "VPN Interface":
-					fmt.Println("  - VPN tunnel not established - restart VPN client")
-				case "Internet Connectivity":
-					fmt.Println("  - Check if route-all is enabled but VPN is disconnected")
-					fmt.Println("  - Try: vpn disconnect to restore direct routing")
-				case "DNS Resolution":
-					fmt.Println("  - DNS may be misconfigured - check /etc/resolv.conf")
-					fmt.Println("  - Try flushing DNS: sudo dscacheutil -flushcache")
-				}
+				printRecommendation(check.Name)
 			}
 		}
 		fmt.Println()
+	}
+}
+
+func printCheck(check DiagnosticResult, verbose bool) {
+	var statusIcon, statusColor string
+	switch check.Status {
+	case "pass":
+		statusIcon = "[PASS]"
+		statusColor = colorGreen
+	case "fail":
+		statusIcon = "[FAIL]"
+		statusColor = colorRed
+	case "warn":
+		statusIcon = "[WARN]"
+		statusColor = colorYellow
+	}
+
+	fmt.Printf("%s%-6s%s %-20s %s\n", statusColor, statusIcon, colorReset, check.Name, check.Message)
+
+	if verbose && check.Details != "" {
+		fmt.Printf("       %s%s%s\n", colorGray, check.Details, colorReset)
+	}
+}
+
+func printPeerDiagnostic(peer PeerDiagnostic, verbose bool) {
+	// Status icon based on reachability
+	var statusIcon, statusColor string
+	if peer.Reachable {
+		statusIcon = "[PASS]"
+		statusColor = colorGreen
+	} else {
+		statusIcon = "[FAIL]"
+		statusColor = colorRed
+	}
+
+	// Main peer line with name and VPN address
+	fmt.Printf("%s%-6s%s %s (%s)\n", statusColor, statusIcon, colorReset, peer.Name, peer.VPNAddress)
+
+	// Indented details
+	if peer.Version != "" {
+		versionColor := colorGreen
+		if !peer.VersionMatch {
+			versionColor = colorYellow
+		}
+		fmt.Printf("         %sVersion:%s %s%s%s", colorGray, colorReset, versionColor, peer.Version, colorReset)
+		if !peer.VersionMatch {
+			fmt.Printf(" %s(mismatch)%s", colorYellow, colorReset)
+		}
+		fmt.Println()
+	}
+
+	if peer.OS != "" {
+		fmt.Printf("         %sOS:%s %s\n", colorGray, colorReset, peer.OS)
+	}
+
+	// Routing status
+	if peer.PublicIP != "" {
+		if peer.RoutingVPN {
+			fmt.Printf("         %sRouting:%s %sVPN%s (IP: %s)\n", colorGray, colorReset, colorGreen, colorReset, peer.PublicIP)
+		} else {
+			fmt.Printf("         %sRouting:%s %sDirect%s %s(not through VPN)%s\n", colorGray, colorReset, colorYellow, colorReset, colorYellow, colorReset)
+		}
+	}
+
+	// SSH status
+	if peer.SSHAccessible {
+		fmt.Printf("         %sSSH:%s %sAccessible%s\n", colorGray, colorReset, colorGreen, colorReset)
+	} else {
+		fmt.Printf("         %sSSH:%s %sNot accessible%s\n", colorGray, colorReset, colorYellow, colorReset)
+	}
+
+	// Warnings (if verbose or if there are warnings)
+	if verbose {
+		if peer.VersionWarning != "" {
+			fmt.Printf("         %s%s%s\n", colorYellow, peer.VersionWarning, colorReset)
+		}
+		if peer.RoutingWarning != "" {
+			fmt.Printf("         %s%s%s\n", colorYellow, peer.RoutingWarning, colorReset)
+		}
+		if peer.SSHWarning != "" {
+			fmt.Printf("         %s%s%s\n", colorYellow, peer.SSHWarning, colorReset)
+		}
+	}
+
+	fmt.Println()
+}
+
+func printRecommendation(checkName string) {
+	switch checkName {
+	case "Local VPN Node":
+		fmt.Println("  - Check if vpn-node daemon is running: ps aux | grep vpn-node")
+		fmt.Println("  - Restart the VPN service: sudo launchctl bootout/bootstrap")
+	case "VPN Server (10.8.0.1)":
+		fmt.Println("  - VPN server may be down - check server status")
+		fmt.Println("  - Restart local VPN client to reconnect")
+	case "VPN Interface":
+		fmt.Println("  - VPN tunnel not established - restart VPN client")
+	case "Internet Connectivity":
+		fmt.Println("  - Check if route-all is enabled but VPN is disconnected")
+		fmt.Println("  - Try: vpn disconnect to restore direct routing")
+	case "DNS Resolution":
+		fmt.Println("  - DNS may be misconfigured - check /etc/resolv.conf")
+		fmt.Println("  - Try flushing DNS: sudo dscacheutil -flushcache")
 	}
 }
