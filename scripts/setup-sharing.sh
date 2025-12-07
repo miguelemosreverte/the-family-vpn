@@ -97,8 +97,41 @@ enable_ssh() {
         print_success "Remote Login (SSH) enabled"
         return 0
     else
-        print_error "Failed to enable Remote Login"
-        print_info "You may need to enable it manually in System Settings > General > Sharing > Remote Login"
+        return 1  # Return failure, caller will handle
+    fi
+}
+
+# Enable SSH with fallback to GUI
+enable_ssh_with_fallback() {
+    if enable_ssh; then
+        return 0
+    fi
+
+    # Programmatic enable failed - need user to enable in System Settings
+    echo ""
+    print_warning "Remote Login (SSH) requires manual approval"
+    print_info "macOS security requires you to enable this in System Settings"
+    echo ""
+    echo -e "  ${CYAN}Please toggle ON 'Remote Login' in the window that opens${NC}"
+    echo ""
+
+    if [[ -t 0 ]]; then
+        # Interactive mode - open settings and wait
+        open_sharing_settings
+        read -p "Press Enter after enabling Remote Login in System Settings... "
+
+        # Re-check
+        sleep 1
+        if check_ssh; then
+            print_success "Remote Login (SSH) enabled"
+            return 0
+        else
+            print_error "Remote Login still not enabled"
+            return 1
+        fi
+    else
+        # Non-interactive mode - just inform
+        print_warning "Run this script interactively to enable Remote Login"
         return 1
     fi
 }
@@ -115,6 +148,17 @@ check_screen_sharing() {
         fi
     fi
     return 1  # Disabled
+}
+
+# Open System Settings to Sharing pane
+open_sharing_settings() {
+    print_info "Opening System Settings > Sharing..."
+    # macOS Ventura+ uses different URL scheme
+    if [[ $(sw_vers -productVersion | cut -d. -f1) -ge 13 ]]; then
+        open "x-apple.systempreferences:com.apple.Sharing-Settings.extension"
+    else
+        open "x-apple.systempreferences:com.apple.preference.sharing"
+    fi
 }
 
 # Enable Screen Sharing
@@ -148,8 +192,41 @@ enable_screen_sharing() {
         print_success "Screen Sharing enabled"
         return 0
     else
-        print_warning "Screen Sharing may require manual enabling"
-        print_info "Go to System Settings > General > Sharing > Screen Sharing"
+        return 1  # Return failure, caller will handle manual enable
+    fi
+}
+
+# Enable Screen Sharing with fallback to GUI
+enable_screen_sharing_with_fallback() {
+    if enable_screen_sharing; then
+        return 0
+    fi
+
+    # Programmatic enable failed - need user to click in System Settings
+    echo ""
+    print_warning "Screen Sharing requires manual approval on modern macOS"
+    print_info "macOS security requires you to enable this in System Settings"
+    echo ""
+    echo -e "  ${CYAN}Please toggle ON 'Screen Sharing' in the window that opens${NC}"
+    echo ""
+
+    if [[ -t 0 ]]; then
+        # Interactive mode - open settings and wait
+        open_sharing_settings
+        read -p "Press Enter after enabling Screen Sharing in System Settings... "
+
+        # Re-check
+        sleep 1
+        if check_screen_sharing; then
+            print_success "Screen Sharing enabled"
+            return 0
+        else
+            print_error "Screen Sharing still not enabled"
+            return 1
+        fi
+    else
+        # Non-interactive mode - just inform
+        print_warning "Run this script interactively to enable Screen Sharing"
         return 1
     fi
 }
@@ -258,14 +335,14 @@ run_wizard() {
         fi
     fi
 
-    # Enable SSH if needed
+    # Enable SSH if needed (with GUI fallback)
     if [[ "$needs_ssh" == "true" ]]; then
-        enable_ssh
+        enable_ssh_with_fallback
     fi
 
-    # Enable Screen Sharing if needed
+    # Enable Screen Sharing if needed (with GUI fallback)
     if [[ "$needs_screen" == "true" ]]; then
-        enable_screen_sharing
+        enable_screen_sharing_with_fallback
     fi
 
     echo ""
