@@ -269,7 +269,7 @@ func (d *Daemon) startServer() error {
 	return nil
 }
 
-// startClient initializes client mode.
+// startClient initializes client mode with retry logic.
 func (d *Daemon) startClient() error {
 	// Initialize connection failure channel
 	d.connFailed = make(chan struct{})
@@ -288,41 +288,86 @@ func (d *Daemon) startClient() error {
 			ourGeo.City, ourGeo.Country, ourGeo.Latitude, ourGeo.Longitude, ourPublicIP)
 	}
 
-	// Connect to server
-	dialCfg := tunnel.DialConfig{
-		Address:    d.config.ConnectTo,
-		UseTLS:     d.config.UseTLS,
-		Key:        d.config.EncryptionKey,
-		Encryption: d.config.Encryption,
-	}
-	conn, err := tunnel.Dial(dialCfg)
-	if err != nil {
-		return fmt.Errorf("failed to connect to server: %w", err)
-	}
-	d.vpnConn = conn
+	// Retry connection with exponential backoff (handles stuck servers)
+	maxRetries := 10
+	baseDelay := 2 * time.Second
+	maxDelay := 30 * time.Second
+	handshakeTimeout := 30 * time.Second
 
-	// Send handshake with our geolocation and routing status
-	hostname, _ := os.Hostname()
-	peerInfo := protocol.PeerInfo{
-		Hostname: hostname,
-		OS:       "darwin", // TODO: detect OS
-		Version:  Version,
-		Geo:      d.ourGeo,
-		PublicIP: d.ourPublicIP,
-		RouteAll: d.config.RouteAll, // Connection Intent Protocol: tell server if routing is enabled
-	}
-	if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
-		conn.Close()
-		return fmt.Errorf("handshake failed: %w", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		select {
+		case <-d.ctx.Done():
+			return fmt.Errorf("startup cancelled")
+		default:
+		}
+
+		if attempt > 1 {
+			delay := baseDelay * time.Duration(1<<uint(attempt-2))
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			log.Printf("[node] Connection attempt %d/%d in %v...", attempt, maxRetries, delay)
+			time.Sleep(delay)
+		}
+
+		// Connect to server
+		dialCfg := tunnel.DialConfig{
+			Address:    d.config.ConnectTo,
+			UseTLS:     d.config.UseTLS,
+			Key:        d.config.EncryptionKey,
+			Encryption: d.config.Encryption,
+		}
+		conn, err := tunnel.Dial(dialCfg)
+		if err != nil {
+			log.Printf("[node] Connection failed (attempt %d/%d): %v", attempt, maxRetries, err)
+			continue
+		}
+
+		// Set deadline for handshake to prevent hanging on stuck servers
+		if err := conn.NetConn.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
+			log.Printf("[node] Warning: failed to set handshake deadline: %v", err)
+		}
+
+		// Send handshake with our geolocation and routing status
+		hostname, _ := os.Hostname()
+		peerInfo := protocol.PeerInfo{
+			Hostname: hostname,
+			OS:       "darwin", // TODO: detect OS
+			Version:  Version,
+			Geo:      d.ourGeo,
+			PublicIP: d.ourPublicIP,
+			RouteAll: d.config.RouteAll, // Connection Intent Protocol: tell server if routing is enabled
+		}
+		if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
+			conn.Close()
+			log.Printf("[node] Handshake write failed (attempt %d/%d): %v", attempt, maxRetries, err)
+			continue
+		}
+
+		// Read assigned IP
+		assignedIP, err := protocol.ReadAssignedIP(conn.NetConn)
+		if err != nil {
+			conn.Close()
+			log.Printf("[node] Handshake read failed (attempt %d/%d): %v", attempt, maxRetries, err)
+			continue
+		}
+
+		// Clear deadline after successful handshake
+		if err := conn.NetConn.SetDeadline(time.Time{}); err != nil {
+			log.Printf("[node] Warning: failed to clear deadline: %v", err)
+		}
+
+		d.vpnConn = conn
+		d.config.VPNAddress = assignedIP
+		log.Printf("[node] Connected to server successfully (attempt %d)", attempt)
+		return d.completeClientSetup(assignedIP)
 	}
 
-	// Read assigned IP
-	assignedIP, err := protocol.ReadAssignedIP(conn.NetConn)
-	if err != nil {
-		conn.Close()
-		return fmt.Errorf("failed to read assigned IP: %w", err)
-	}
-	d.config.VPNAddress = assignedIP
+	return fmt.Errorf("failed to connect after %d attempts", maxRetries)
+}
+
+// completeClientSetup finishes client initialization after handshake.
+func (d *Daemon) completeClientSetup(assignedIP string) error {
 	log.Printf("[node] Assigned VPN IP: %s", assignedIP)
 
 	// Create TUN device with assigned IP
@@ -332,7 +377,7 @@ func (d *Daemon) startClient() error {
 	}
 	tun, err := tunnel.New(tunCfg)
 	if err != nil {
-		conn.Close()
+		d.vpnConn.Close()
 		return fmt.Errorf("failed to create TUN: %w", err)
 	}
 	d.tun = tun
