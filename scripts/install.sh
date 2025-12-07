@@ -130,18 +130,48 @@ print_success() {
 cleanup_existing() {
     print_step "Cleaning up existing VPN installation..."
 
-    # Kill all VPN processes first
-    run_sudo pkill -9 -f "vpn-node" || true
+    # First, gracefully disconnect VPN to restore routing table
+    # This is critical - killing vpn-node without disconnect leaves routes broken
+    if [[ -x "$INSTALL_DIR/bin/vpn" ]]; then
+        print_step "Gracefully disconnecting VPN..."
+        "$INSTALL_DIR/bin/vpn" disconnect 2>/dev/null || true
+        sleep 2
+    fi
+
+    # Kill UI processes (these don't affect routing)
     run_sudo pkill -9 -f "vpn.*ui" || true
-    sleep 2
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        # Unload all launchd services
-        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-node.plist || true
-        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-ui.plist || true
-        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-update.plist || true
-        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-health.plist || true
-        run_sudo launchctl unload /Library/LaunchDaemons/com.family.vpn-nosleep.plist || true
+        # Save the current default gateway before stopping VPN
+        # In case graceful disconnect didn't work
+        CURRENT_GW=$(route -n get default 2>/dev/null | grep gateway | awk '{print $2}')
+        CURRENT_IF=$(route -n get default 2>/dev/null | grep interface | awk '{print $2}')
+
+        # Unload all launchd services (this will cleanly stop vpn-node)
+        run_sudo launchctl bootout system/com.family.vpn-node 2>/dev/null || true
+        run_sudo launchctl bootout system/com.family.vpn-ui 2>/dev/null || true
+        run_sudo launchctl bootout system/com.family.vpn-update 2>/dev/null || true
+        run_sudo launchctl bootout system/com.family.vpn-health 2>/dev/null || true
+        run_sudo launchctl bootout system/com.family.vpn-nosleep 2>/dev/null || true
+        sleep 2
+
+        # Kill any remaining VPN processes
+        run_sudo pkill -9 -f "vpn-node" || true
+        sleep 1
+
+        # Restore default route if it was lost
+        if ! route -n get default &>/dev/null; then
+            print_warning "Default route lost, attempting to restore..."
+            # Try to get gateway from network service
+            for SERVICE in "Wi-Fi" "Ethernet" "USB 10/100/1000 LAN"; do
+                GW=$(networksetup -getinfo "$SERVICE" 2>/dev/null | grep "^Router:" | awk '{print $2}')
+                if [[ -n "$GW" && "$GW" != "none" ]]; then
+                    run_sudo route add default "$GW" 2>/dev/null || true
+                    print_success "Restored default route via $SERVICE ($GW)"
+                    break
+                fi
+            done
+        fi
 
         # Remove plist files
         run_sudo rm -f /Library/LaunchDaemons/com.family.vpn-node.plist || true
@@ -160,6 +190,9 @@ cleanup_existing() {
         run_sudo systemctl disable vpn-update.timer || true
         run_sudo systemctl disable vpn-health.timer || true
 
+        # Kill any remaining VPN processes
+        run_sudo pkill -9 -f "vpn-node" || true
+
         # Remove service files
         run_sudo rm -f /etc/systemd/system/vpn-node.service || true
         run_sudo rm -f /etc/systemd/system/vpn-ui.service || true
@@ -168,6 +201,17 @@ cleanup_existing() {
         run_sudo rm -f /etc/systemd/system/vpn-health.service || true
         run_sudo rm -f /etc/systemd/system/vpn-health.timer || true
         run_sudo systemctl daemon-reload || true
+    fi
+
+    # Verify network connectivity before proceeding
+    print_step "Verifying network connectivity..."
+    if ! curl -s --max-time 5 https://github.com &>/dev/null; then
+        print_warning "Network connectivity issue detected, waiting for recovery..."
+        sleep 3
+        # Try to ping google DNS as fallback check
+        if ! ping -c 1 -W 2 8.8.8.8 &>/dev/null; then
+            print_error "Network still not available. You may need to restart Wi-Fi."
+        fi
     fi
 
     # Clear state files (reset failure counter, locks)
