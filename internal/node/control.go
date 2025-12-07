@@ -138,22 +138,26 @@ func (d *Daemon) handleUpdate(enc *json.Encoder, req *protocol.Request) {
 		}
 	}
 
-	// TODO: Implement actual update logic
-	// 1. git pull
-	// 2. rebuild if needed
-	// 3. graceful restart
-
 	if params.All {
-		// TODO: Propagate update to all peers
 		log.Printf("[control] Update requested for ALL nodes (rolling=%v)", params.Rolling)
 	} else {
 		log.Printf("[control] Update requested for this node")
 	}
 
+	// Perform actual deployment: git pull, check versions, rebuild if needed
+	go d.performDeploy(DeployRequest{
+		Ref:    "HEAD",
+		Branch: "main",
+	})
+
+	// Return success immediately (deployment runs async)
 	result := protocol.UpdateResult{
 		Success: true,
 		Updated: []string{d.config.NodeName},
 	}
+
+	// If --all flag, the server will broadcast UPDATE_AVAILABLE to peers
+	// via broadcastUpdate() called from performDeploy()
 
 	d.sendResult(enc, req.ID, result)
 }
