@@ -170,9 +170,20 @@ cleanup_existing() {
         run_sudo systemctl daemon-reload || true
     fi
 
-    # Clear health state file (reset failure counter)
+    # Clear state files (reset failure counter, locks)
     run_sudo rm -f /tmp/vpn-health-state || true
     run_sudo rm -f /tmp/vpn-update.lock || true
+    run_sudo rm -rf /tmp/vpn-update.lock || true
+
+    # Clear old log files for fresh start
+    run_sudo rm -f /var/log/vpn-node.log || true
+    run_sudo rm -f /var/log/vpn-ui.log || true
+    run_sudo rm -f /var/log/vpn-update.log || true
+    run_sudo rm -f /var/log/vpn-health.log || true
+
+    # Clear old binaries (will be rebuilt)
+    rm -f "$INSTALL_DIR/bin/vpn-node" 2>/dev/null || true
+    rm -f "$INSTALL_DIR/bin/vpn" 2>/dev/null || true
 
     print_success "Cleanup complete"
 }
@@ -943,6 +954,7 @@ install_macos_ui_service() {
 
     # Create plist for UI
     # IMPORTANT: PATH includes /opt/homebrew/bin for sshpass (used for SSH from UI)
+    # Uses --templates for hot reload (changes take effect on browser refresh)
     sudo tee "$PLIST_PATH" > /dev/null << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -958,6 +970,8 @@ install_macos_ui_service() {
         <string>ui</string>
         <string>--listen</string>
         <string>localhost:8080</string>
+        <string>--templates</string>
+        <string>$INSTALL_DIR/internal/ui/templates</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -1037,7 +1051,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/bin/vpn --node 95.217.238.72:9001 ui --listen localhost:8080
+ExecStart=$INSTALL_DIR/bin/vpn --node 95.217.238.72:9001 ui --listen localhost:8080 --templates $INSTALL_DIR/internal/ui/templates
 Restart=always
 RestartSec=5
 WorkingDirectory=$INSTALL_DIR
