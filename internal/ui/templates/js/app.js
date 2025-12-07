@@ -37,6 +37,9 @@
                 // Load topology (map + peers table)
                 await loadPeers();
 
+                // Load install handshakes history
+                await loadHandshakes();
+
                 // Load observability (metrics + logs)
                 await loadObservability();
 
@@ -1397,9 +1400,13 @@
                 const data = await resp.json();
                 const newVersion = data.version || '0.0.0';
 
-                document.getElementById('footer-version').textContent = 'v' + newVersion;
-                document.getElementById('footer-node').textContent = data.node_name || 'Unknown';
-                document.getElementById('footer-status-dot').className = 'footer-status-dot';
+                const footerVersion = document.getElementById('footer-version');
+                const footerNode = document.getElementById('footer-node');
+                const footerStatusDot = document.getElementById('footer-status-dot');
+
+                if (footerVersion) footerVersion.textContent = 'v' + newVersion;
+                if (footerNode) footerNode.textContent = data.node_name || 'Unknown';
+                if (footerStatusDot) footerStatusDot.className = 'footer-status-dot';
 
                 // Check if version changed (deployment happened)
                 if (currentVersion !== null && currentVersion !== newVersion) {
