@@ -477,8 +477,13 @@ build_binaries() {
     fi
 
     mkdir -p bin
-    $GO_CMD build -o bin/vpn-node ./cmd/vpn-node
-    $GO_CMD build -o bin/vpn ./cmd/vpn
+
+    # Get git version for embedding
+    GIT_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+    LDFLAGS="-X github.com/family-vpn/the-family-vpn/internal/node.Version=$GIT_VERSION"
+
+    $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn-node ./cmd/vpn-node
+    $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn ./cmd/vpn
 
     # Sign binaries on macOS (required for TUN device access)
     if [[ "$OS" == "macos" ]]; then
@@ -562,10 +567,12 @@ if [[ "$LOCAL" != "$REMOTE" ]]; then
         GO_CMD="/usr/local/go/bin/go"
     fi
 
-    # Rebuild binaries
+    # Rebuild binaries with version embedded
     log "Rebuilding binaries..."
-    $GO_CMD build -o bin/vpn-node ./cmd/vpn-node 2>&1 | sudo tee -a "$LOG_FILE"
-    $GO_CMD build -o bin/vpn ./cmd/vpn 2>&1 | sudo tee -a "$LOG_FILE"
+    GIT_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
+    LDFLAGS="-X github.com/family-vpn/the-family-vpn/internal/node.Version=$GIT_VERSION"
+    $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn-node ./cmd/vpn-node 2>&1 | sudo tee -a "$LOG_FILE"
+    $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn ./cmd/vpn 2>&1 | sudo tee -a "$LOG_FILE"
 
     # Sign on macOS (CRITICAL for TUN device access)
     if [[ "$OSTYPE" == "darwin"* ]]; then
