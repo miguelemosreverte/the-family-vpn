@@ -11,6 +11,20 @@ INSTALL_DIR="$HOME/the-family-vpn"
 VPN_BIN="$INSTALL_DIR/bin/vpn"
 REPORT_FILE="$INSTALL_DIR/HEALTH_REPORT.md"
 
+# Load .env if it exists (for SUDO_PASSWORD)
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+    source "$INSTALL_DIR/.env"
+fi
+
+# Helper function to run sudo with password from .env
+run_sudo() {
+    if [[ -n "$SUDO_PASSWORD" ]]; then
+        echo "$SUDO_PASSWORD" | sudo -S "$@" 2>/dev/null
+    else
+        sudo "$@" 2>/dev/null
+    fi
+}
+
 # Temporary file for building report
 TEMP_REPORT=$(mktemp)
 
@@ -84,7 +98,8 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     report "### macOS LaunchDaemons"
     report ""
     for svc in vpn-node vpn-ui; do
-        if sudo launchctl list 2>/dev/null | grep -q "com.family.$svc"; then
+        # Use launchctl print to check if service is loaded
+        if run_sudo launchctl print system/com.family.$svc &>/dev/null; then
             report "- [x] \`com.family.$svc\` loaded"
         else
             report "- [ ] \`com.family.$svc\` loaded"
@@ -102,15 +117,16 @@ report ""
 
 if [[ -x "$VPN_BIN" ]]; then
     STATUS_OUTPUT=$("$VPN_BIN" status 2>&1)
-    if echo "$STATUS_OUTPUT" | grep -q "Connected"; then
+    # Check if we have a VPN IP assigned (indicates connected)
+    VPN_IP=$(echo "$STATUS_OUTPUT" | grep -i "VPN IP:" | sed 's/.*: *//' | tr -d '[:space:]')
+
+    if [[ -n "$VPN_IP" && "$VPN_IP" =~ ^10\.8\. ]]; then
         report "- [x] Connected to VPN server"
-
-        # Extract details
-        NODE_NAME=$(echo "$STATUS_OUTPUT" | grep -i "node" | head -1 | sed 's/.*: *//')
-        VPN_IP=$(echo "$STATUS_OUTPUT" | grep -i "vpn.*address\|vpn.*ip" | head -1 | sed 's/.*: *//')
-
-        [[ -n "$NODE_NAME" ]] && report "  - Node: \`$NODE_NAME\`"
-        [[ -n "$VPN_IP" ]] && report "  - VPN IP: \`$VPN_IP\`"
+        NODE_NAME=$(echo "$STATUS_OUTPUT" | grep -i "Name:" | sed 's/.*: *//')
+        UPTIME=$(echo "$STATUS_OUTPUT" | grep -i "Uptime:" | sed 's/.*: *//')
+        report "  - Node: \`$NODE_NAME\`"
+        report "  - VPN IP: \`$VPN_IP\`"
+        [[ -n "$UPTIME" ]] && report "  - Uptime: $UPTIME"
     else
         report "- [ ] Connected to VPN server"
     fi
@@ -165,9 +181,10 @@ report ""
 
 if [[ -x "$VPN_BIN" ]]; then
     PEERS_OUTPUT=$("$VPN_BIN" peers 2>&1)
-    PEER_COUNT=$(echo "$PEERS_OUTPUT" | grep -c "10\.8\." || echo "0")
+    PEER_COUNT=$(echo "$PEERS_OUTPUT" | grep -c "10\.8\." 2>/dev/null || echo "0")
+    PEER_COUNT=$(echo "$PEER_COUNT" | tr -d '[:space:]')
 
-    if [[ "$PEER_COUNT" -gt 0 ]]; then
+    if [[ "$PEER_COUNT" =~ ^[0-9]+$ ]] && [[ "$PEER_COUNT" -gt 0 ]]; then
         report "- [x] Peers discovered ($PEER_COUNT peers)"
         report ""
         report "| Name | VPN IP | Status |"
