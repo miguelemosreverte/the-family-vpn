@@ -274,6 +274,31 @@ fi
 report ""
 
 # ============================================================
+# 8. Remote Access (macOS only)
+# ============================================================
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    report "## 8. Remote Access (macOS)"
+    report ""
+
+    # Check SSH
+    SSH_STATUS=$(run_sudo systemsetup -getremotelogin 2>&1 | grep -i "on")
+    if [[ -n "$SSH_STATUS" ]]; then
+        report "- [x] Remote Login (SSH) enabled"
+    else
+        report "- [ ] Remote Login (SSH) enabled"
+    fi
+
+    # Check Screen Sharing
+    if run_sudo launchctl list 2>/dev/null | grep -q "com.apple.screensharing"; then
+        report "- [x] Screen Sharing (VNC) enabled"
+    else
+        report "- [ ] Screen Sharing (VNC) enabled"
+    fi
+
+    report ""
+fi
+
+# ============================================================
 # Summary
 # ============================================================
 report "---"

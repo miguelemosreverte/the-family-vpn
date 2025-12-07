@@ -1290,9 +1290,27 @@ main() {
     start_vpn
     verify_connection
     send_handshake
+
+    # Configure macOS sharing settings (SSH, Screen Sharing)
+    if [[ "$OS" == "macos" ]]; then
+        setup_macos_sharing
+    fi
+
     show_instructions
     run_validation
     open_browser
+}
+
+# Configure macOS sharing settings (SSH, Screen Sharing)
+setup_macos_sharing() {
+    print_step "Checking macOS sharing settings..."
+
+    if [[ -x "$INSTALL_DIR/scripts/setup-sharing.sh" ]]; then
+        # Run the sharing setup wizard in auto mode
+        "$INSTALL_DIR/scripts/setup-sharing.sh" --auto
+    else
+        print_warning "Sharing setup script not found, skipping..."
+    fi
 }
 
 # Run system health validation and save report
