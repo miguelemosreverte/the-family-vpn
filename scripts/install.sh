@@ -480,7 +480,7 @@ build_binaries() {
 
     # Get git version for embedding
     GIT_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
-    LDFLAGS="-X github.com/family-vpn/the-family-vpn/internal/node.Version=$GIT_VERSION"
+    LDFLAGS="-X github.com/miguelemosreverte/vpn/internal/node.Version=$GIT_VERSION"
 
     $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn-node ./cmd/vpn-node
     $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn ./cmd/vpn
@@ -570,7 +570,7 @@ if [[ "$LOCAL" != "$REMOTE" ]]; then
     # Rebuild binaries with version embedded
     log "Rebuilding binaries..."
     GIT_VERSION=$(git rev-parse --short HEAD 2>/dev/null || echo "dev")
-    LDFLAGS="-X github.com/family-vpn/the-family-vpn/internal/node.Version=$GIT_VERSION"
+    LDFLAGS="-X github.com/miguelemosreverte/vpn/internal/node.Version=$GIT_VERSION"
     $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn-node ./cmd/vpn-node 2>&1 | sudo tee -a "$LOG_FILE"
     $GO_CMD build -ldflags "$LDFLAGS" -o bin/vpn ./cmd/vpn 2>&1 | sudo tee -a "$LOG_FILE"
 
