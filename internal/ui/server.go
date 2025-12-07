@@ -20,6 +20,9 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
+//go:embed templates/index.html templates/css/styles.css templates/js/app.js templates/html/body.html
+var templateFiles embed.FS
+
 // Server serves the web dashboard.
 type Server struct {
 	nodeAddr     string
@@ -109,39 +112,55 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // If templatesDir is set, loads from disk (hot reload); otherwise uses embedded.
 func (s *Server) loadIndexHTML() (string, error) {
 	if s.templatesDir == "" {
-		// Use embedded template (from template.go)
-		return indexHTML, nil
+		// Use embedded templates
+		return assembleTemplates(
+			func(path string) ([]byte, error) {
+				return templateFiles.ReadFile(path)
+			},
+			"templates/index.html",
+			"templates/css/styles.css",
+			"templates/js/app.js",
+			"templates/html/body.html",
+		)
 	}
 
 	// Load from disk for hot reload
-	indexPath := filepath.Join(s.templatesDir, "index.html")
-	cssPath := filepath.Join(s.templatesDir, "css", "styles.css")
-	jsPath := filepath.Join(s.templatesDir, "js", "app.js")
-	bodyPath := filepath.Join(s.templatesDir, "html", "body.html")
+	return assembleTemplates(
+		func(path string) ([]byte, error) {
+			return os.ReadFile(path)
+		},
+		filepath.Join(s.templatesDir, "index.html"),
+		filepath.Join(s.templatesDir, "css", "styles.css"),
+		filepath.Join(s.templatesDir, "js", "app.js"),
+		filepath.Join(s.templatesDir, "html", "body.html"),
+	)
+}
 
+// assembleTemplates builds the index HTML from template parts using the provided reader function.
+func assembleTemplates(readFile func(string) ([]byte, error), indexPath, cssPath, jsPath, bodyPath string) (string, error) {
 	// Read index template
-	indexBytes, err := os.ReadFile(indexPath)
+	indexBytes, err := readFile(indexPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read index.html: %w", err)
 	}
 	html := string(indexBytes)
 
 	// Read and inject CSS
-	cssBytes, err := os.ReadFile(cssPath)
+	cssBytes, err := readFile(cssPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read styles.css: %w", err)
 	}
 	html = strings.Replace(html, "{{CSS}}", string(cssBytes), 1)
 
 	// Read and inject body HTML
-	bodyBytes, err := os.ReadFile(bodyPath)
+	bodyBytes, err := readFile(bodyPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read body.html: %w", err)
 	}
 	html = strings.Replace(html, "{{BODY}}", string(bodyBytes), 1)
 
 	// Read and inject JS
-	jsBytes, err := os.ReadFile(jsPath)
+	jsBytes, err := readFile(jsPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read app.js: %w", err)
 	}
@@ -431,13 +450,6 @@ func (s *Server) handleHandshakes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(history)
 }
-
-// Placeholder for compile - will be replaced with actual HTML
-var indexHTML = `<!DOCTYPE html>
-<html>
-<head><title>VPN Dashboard</title></head>
-<body>Loading...</body>
-</html>`
 
 func init() {
 	// Initialize time location
