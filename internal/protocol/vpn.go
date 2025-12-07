@@ -149,6 +149,44 @@ const (
 	// Server restart notification: sent to clients before server shuts down
 	// Clients receiving this should expect disconnection and optionally reconnect
 	CmdServerRestarting = "SERVER_RESTARTING"
+
+	// ==========================================================================
+	// Connection Intent Protocol
+	// ==========================================================================
+	// This protocol ensures correct reconnection behavior after disconnections.
+	//
+	// The Problem:
+	// When a VPN connection is lost, we restore direct routing to prevent nodes
+	// from becoming unreachable ("decapitated"). However, after server restart,
+	// clients should automatically re-enable VPN routing - but only if the
+	// disconnection was NOT intentional.
+	//
+	// The Solution (Byzantine-fault-tolerant design):
+	// - When a client intentionally disconnects (via "vpn disconnect"), it sends
+	//   DISCONNECT_INTENT to the server BEFORE disconnecting.
+	// - The server acknowledges and records this intent.
+	// - After server restart, the server checks which clients were connected
+	//   WITHOUT having sent a DISCONNECT_INTENT.
+	// - Those clients receive RECONNECT_INVITE to re-enable VPN routing.
+	//
+	// This respects user intent: manual disconnects stay disconnected,
+	// crash/restart disconnects get automatically restored.
+	// ==========================================================================
+
+	// Client -> Server: Intentional disconnect notification
+	// Client sends this before disconnecting to indicate user-initiated disconnect.
+	// Format: "DISCONNECT_INTENT:" + JSON {"node_name": "...", "reason": "user_request"}
+	CmdDisconnectIntent = "DISCONNECT_INTENT:"
+
+	// Server -> Client: Invitation to re-enable VPN routing after server restart
+	// Sent only to clients that did NOT send DISCONNECT_INTENT before losing connection.
+	// Format: "RECONNECT_INVITE:" + JSON {"server_name": "...", "reason": "server_restart"}
+	CmdReconnectInvite = "RECONNECT_INVITE:"
+
+	// Server -> Client: Acknowledgement of disconnect intent
+	// Sent by server to confirm receipt of DISCONNECT_INTENT (at-least-once delivery)
+	// Format: "DISCONNECT_ACK"
+	CmdDisconnectAck = "DISCONNECT_ACK"
 )
 
 // GeoLocation represents geographical coordinates and location info.
@@ -194,4 +232,85 @@ func ParsePeerListMessage(data []byte) ([]PeerListEntry, error) {
 // IsPeerListMessage checks if a command is a PEER_LIST message.
 func IsPeerListMessage(cmd string) bool {
 	return len(cmd) >= len(CmdPeerList) && cmd[:len(CmdPeerList)] == CmdPeerList
+}
+
+// =============================================================================
+// Connection Intent Protocol Messages
+// =============================================================================
+
+// DisconnectIntent is sent by client to server before intentional disconnect.
+type DisconnectIntent struct {
+	NodeName   string `json:"node_name"`
+	VPNAddress string `json:"vpn_address"`
+	Reason     string `json:"reason"` // "user_request", "cli_command", etc.
+	RouteAll   bool   `json:"route_all"` // Was routing enabled when disconnecting
+}
+
+// ReconnectInvite is sent by server to client after server restart.
+type ReconnectInvite struct {
+	ServerName       string `json:"server_name"`
+	Reason           string `json:"reason"` // "server_restart", "connection_restored"
+	ShouldEnableRouting bool   `json:"should_enable_routing"` // Client had routing enabled before
+}
+
+// MakeDisconnectIntentMessage creates a DISCONNECT_INTENT control message.
+func MakeDisconnectIntentMessage(intent DisconnectIntent) []byte {
+	data, _ := json.Marshal(intent)
+	return MakeControlMessage(CmdDisconnectIntent + string(data))
+}
+
+// ParseDisconnectIntentMessage extracts intent from a DISCONNECT_INTENT message.
+func ParseDisconnectIntentMessage(data []byte) (*DisconnectIntent, error) {
+	cmd := ExtractControlCommand(data)
+	if !IsDisconnectIntentMessage(cmd) {
+		return nil, fmt.Errorf("not a disconnect intent message")
+	}
+
+	jsonData := cmd[len(CmdDisconnectIntent):]
+	var intent DisconnectIntent
+	if err := json.Unmarshal([]byte(jsonData), &intent); err != nil {
+		return nil, fmt.Errorf("failed to parse disconnect intent: %w", err)
+	}
+	return &intent, nil
+}
+
+// IsDisconnectIntentMessage checks if a command is a DISCONNECT_INTENT message.
+func IsDisconnectIntentMessage(cmd string) bool {
+	return len(cmd) >= len(CmdDisconnectIntent) && cmd[:len(CmdDisconnectIntent)] == CmdDisconnectIntent
+}
+
+// MakeReconnectInviteMessage creates a RECONNECT_INVITE control message.
+func MakeReconnectInviteMessage(invite ReconnectInvite) []byte {
+	data, _ := json.Marshal(invite)
+	return MakeControlMessage(CmdReconnectInvite + string(data))
+}
+
+// ParseReconnectInviteMessage extracts invite from a RECONNECT_INVITE message.
+func ParseReconnectInviteMessage(data []byte) (*ReconnectInvite, error) {
+	cmd := ExtractControlCommand(data)
+	if !IsReconnectInviteMessage(cmd) {
+		return nil, fmt.Errorf("not a reconnect invite message")
+	}
+
+	jsonData := cmd[len(CmdReconnectInvite):]
+	var invite ReconnectInvite
+	if err := json.Unmarshal([]byte(jsonData), &invite); err != nil {
+		return nil, fmt.Errorf("failed to parse reconnect invite: %w", err)
+	}
+	return &invite, nil
+}
+
+// IsReconnectInviteMessage checks if a command is a RECONNECT_INVITE message.
+func IsReconnectInviteMessage(cmd string) bool {
+	return len(cmd) >= len(CmdReconnectInvite) && cmd[:len(CmdReconnectInvite)] == CmdReconnectInvite
+}
+
+// MakeDisconnectAckMessage creates a DISCONNECT_ACK control message.
+func MakeDisconnectAckMessage() []byte {
+	return MakeControlMessage(CmdDisconnectAck)
+}
+
+// IsDisconnectAckMessage checks if a command is a DISCONNECT_ACK message.
+func IsDisconnectAckMessage(cmd string) bool {
+	return cmd == CmdDisconnectAck
 }

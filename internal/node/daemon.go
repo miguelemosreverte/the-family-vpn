@@ -301,7 +301,7 @@ func (d *Daemon) startClient() error {
 	}
 	d.vpnConn = conn
 
-	// Send handshake with our geolocation
+	// Send handshake with our geolocation and routing status
 	hostname, _ := os.Hostname()
 	peerInfo := protocol.PeerInfo{
 		Hostname: hostname,
@@ -309,6 +309,7 @@ func (d *Daemon) startClient() error {
 		Version:  Version,
 		Geo:      d.ourGeo,
 		PublicIP: d.ourPublicIP,
+		RouteAll: d.config.RouteAll, // Connection Intent Protocol: tell server if routing is enabled
 	}
 	if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
 		conn.Close()
@@ -475,6 +476,39 @@ func (d *Daemon) handleVPNClient(conn *tunnel.Conn) {
 	// Broadcast updated peer list to all clients
 	d.broadcastPeerList()
 
+	// Connection Intent Protocol: Check if this client should restore routing
+	// This handles both server restarts and client reconnections elegantly
+	if d.store != nil {
+		// Check previous state before recording new connection
+		prevState, err := d.store.GetClientState(vpnIP)
+
+		// Record current connection state
+		if err := d.store.SetClientConnected(vpnIP, peerInfo.Hostname, peerInfo.RouteAll); err != nil {
+			log.Printf("[vpn] Failed to record client connection: %v", err)
+		}
+
+		// Send RECONNECT_INVITE if:
+		// 1. Client previously had routing enabled (state was connected_routing)
+		// 2. Client did NOT intentionally disconnect
+		// 3. Client is not currently routing (so they need the invite)
+		if err == nil && prevState != nil &&
+		   prevState.State == store.ClientStateConnectedRouting &&
+		   !peerInfo.RouteAll {
+			log.Printf("[vpn] Client %s was previously routing, sending RECONNECT_INVITE", vpnIP)
+			invite := protocol.ReconnectInvite{
+				ServerName:          d.config.NodeName,
+				Reason:              "reconnection",
+				ShouldEnableRouting: true,
+			}
+			inviteMsg := protocol.MakeReconnectInviteMessage(invite)
+			if err := conn.WritePacket(inviteMsg); err != nil {
+				log.Printf("[vpn] Failed to send RECONNECT_INVITE to %s: %v", vpnIP, err)
+			} else {
+				log.Printf("[vpn] Sent RECONNECT_INVITE to %s", vpnIP)
+			}
+		}
+	}
+
 	// Handle packets from this client
 	d.handleClientPackets(conn, vpnIP)
 
@@ -516,7 +550,7 @@ func (d *Daemon) handleClientPackets(conn *tunnel.Conn, vpnIP string) {
 		// Check for control messages
 		if protocol.IsControlMessage(packet) {
 			cmd := protocol.ExtractControlCommand(packet)
-			log.Printf("[vpn] Control message from %s: %s", vpnIP, cmd)
+			d.handleServerControlMessage(conn, vpnIP, cmd, packet)
 			continue
 		}
 
@@ -539,6 +573,41 @@ func (d *Daemon) handleClientPackets(conn *tunnel.Conn, vpnIP string) {
 		}
 		d.mu.Unlock()
 	}
+}
+
+// handleServerControlMessage handles control messages from clients (server mode).
+// This is part of the Connection Intent Protocol for reliable reconnection.
+func (d *Daemon) handleServerControlMessage(conn *tunnel.Conn, vpnIP, cmd string, packet []byte) {
+	// Handle DISCONNECT_INTENT: Client is intentionally disconnecting
+	if protocol.IsDisconnectIntentMessage(cmd) {
+		intent, err := protocol.ParseDisconnectIntentMessage(packet)
+		if err != nil {
+			log.Printf("[vpn] Failed to parse DISCONNECT_INTENT from %s: %v", vpnIP, err)
+			return
+		}
+
+		log.Printf("[vpn] Received DISCONNECT_INTENT from %s (node: %s, reason: %s, had_routing: %v)",
+			vpnIP, intent.NodeName, intent.Reason, intent.RouteAll)
+
+		// Record intentional disconnect in store (if server has store)
+		if d.store != nil {
+			if err := d.store.SetClientDisconnectedIntentional(vpnIP, intent.Reason); err != nil {
+				log.Printf("[vpn] Failed to record disconnect intent: %v", err)
+			}
+		}
+
+		// Send acknowledgement
+		ack := protocol.MakeDisconnectAckMessage()
+		if err := conn.WritePacket(ack); err != nil {
+			log.Printf("[vpn] Failed to send DISCONNECT_ACK to %s: %v", vpnIP, err)
+		} else {
+			log.Printf("[vpn] Sent DISCONNECT_ACK to %s", vpnIP)
+		}
+		return
+	}
+
+	// Log other control messages
+	log.Printf("[vpn] Control message from %s: %s", vpnIP, cmd)
 }
 
 // routeTUNPackets reads from TUN and routes to the correct peer (server mode).
@@ -686,6 +755,25 @@ func (d *Daemon) forwardServerToTUN() {
 			// Handle PEER_LIST from server
 			if protocol.IsPeerListMessage(cmd) {
 				d.handlePeerListMessage(packet)
+				continue
+			}
+
+			// Handle RECONNECT_INVITE from server (Connection Intent Protocol)
+			// Server sends this after restart to clients that didn't intentionally disconnect
+			if protocol.IsReconnectInviteMessage(cmd) {
+				invite, err := protocol.ParseReconnectInviteMessage(packet)
+				if err != nil {
+					log.Printf("[vpn] Failed to parse RECONNECT_INVITE: %v", err)
+				} else {
+					d.handleReconnectInvite(invite)
+				}
+				continue
+			}
+
+			// Handle DISCONNECT_ACK from server (Connection Intent Protocol)
+			// Server acknowledges our DISCONNECT_INTENT
+			if protocol.IsDisconnectAckMessage(cmd) {
+				log.Printf("[vpn] Received DISCONNECT_ACK from server")
 				continue
 			}
 
@@ -1107,6 +1195,37 @@ func (d *Daemon) handlePeerListMessage(packet []byte) {
 	}
 }
 
+// handleReconnectInvite handles a RECONNECT_INVITE from the server.
+// This is part of the Connection Intent Protocol: after server restart, the server
+// invites clients that didn't intentionally disconnect to re-enable routing.
+func (d *Daemon) handleReconnectInvite(invite *protocol.ReconnectInvite) {
+	log.Printf("[vpn] ========================================")
+	log.Printf("[vpn] RECONNECT_INVITE RECEIVED")
+	log.Printf("[vpn] ========================================")
+	log.Printf("[vpn] Server: %s", invite.ServerName)
+	log.Printf("[vpn] Reason: %s", invite.Reason)
+	log.Printf("[vpn] Should enable routing: %v", invite.ShouldEnableRouting)
+
+	// Only enable routing if the server says we should and we're not already routing
+	if invite.ShouldEnableRouting && !d.config.RouteAll {
+		log.Printf("[vpn] Server invited us to re-enable VPN routing")
+		log.Printf("[vpn] Automatically enabling route-all mode...")
+
+		if err := d.EnableRouteAll(); err != nil {
+			log.Printf("[vpn] Failed to enable routing: %v", err)
+			log.Printf("[vpn] You can manually enable with: vpn connect")
+		} else {
+			log.Printf("[vpn] ========================================")
+			log.Printf("[vpn] VPN ROUTING AUTOMATICALLY RESTORED")
+			log.Printf("[vpn] ========================================")
+		}
+	} else if d.config.RouteAll {
+		log.Printf("[vpn] Already routing through VPN, ignoring invite")
+	} else {
+		log.Printf("[vpn] Server didn't request routing, keeping current state")
+	}
+}
+
 // GetNetworkPeers returns the list of network peers (client mode).
 func (d *Daemon) GetNetworkPeers() []protocol.PeerListEntry {
 	d.networkPeersMu.RLock()
@@ -1328,7 +1447,7 @@ func (d *Daemon) attemptReconnect(restoreRouteAll bool) {
 			continue
 		}
 
-		// Send handshake
+		// Send handshake with current routing status
 		hostname, _ := os.Hostname()
 		peerInfo := protocol.PeerInfo{
 			Hostname: hostname,
@@ -1336,6 +1455,7 @@ func (d *Daemon) attemptReconnect(restoreRouteAll bool) {
 			Version:  Version,
 			Geo:      d.ourGeo,
 			PublicIP: d.ourPublicIP,
+			RouteAll: d.config.RouteAll, // Connection Intent Protocol: tell server if routing is enabled
 		}
 		if err := protocol.WriteHandshake(conn.NetConn, d.config.Encryption, peerInfo); err != nil {
 			log.Printf("[vpn] Handshake failed: %v", err)

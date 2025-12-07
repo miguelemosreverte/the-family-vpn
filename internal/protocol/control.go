@@ -56,6 +56,7 @@ type PeerInfo struct {
 	Latency    string       `json:"latency,omitempty"`
 	Bandwidth  float64      `json:"bandwidth_bps,omitempty"`
 	Geo        *GeoLocation `json:"geo,omitempty"`
+	RouteAll   bool         `json:"route_all,omitempty"` // Whether routing is enabled (Connection Intent Protocol)
 }
 
 // PeersResult is returned by the "peers" method.

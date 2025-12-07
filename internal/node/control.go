@@ -384,7 +384,32 @@ func (d *Daemon) handleConnect(enc *json.Encoder, req *protocol.Request) {
 }
 
 // handleDisconnect disables route-all traffic through VPN.
+// This implements the Connection Intent Protocol: before disabling routing,
+// we notify the server of our intentional disconnect so it won't auto-invite
+// us to re-enable routing after a server restart.
 func (d *Daemon) handleDisconnect(enc *json.Encoder, req *protocol.Request) {
+	// Only send intent if we're connected to a server and have routing enabled
+	if d.vpnConn != nil && d.config.RouteAll {
+		// Send DISCONNECT_INTENT to server (Connection Intent Protocol)
+		hostname, _ := os.Hostname()
+		intent := protocol.DisconnectIntent{
+			NodeName:   hostname,
+			VPNAddress: d.config.VPNAddress,
+			Reason:     "user_request",
+			RouteAll:   d.config.RouteAll,
+		}
+		intentMsg := protocol.MakeDisconnectIntentMessage(intent)
+		if err := d.vpnConn.WritePacket(intentMsg); err != nil {
+			log.Printf("[vpn] Failed to send DISCONNECT_INTENT: %v", err)
+			// Continue anyway - disconnection is more important than the intent protocol
+		} else {
+			log.Printf("[vpn] Sent DISCONNECT_INTENT to server (reason: user_request)")
+		}
+		// Note: We don't wait for ACK - disconnect should be fast and reliable
+		// The server will record the intent anyway, and if it doesn't receive it,
+		// the worst case is that we get a reconnect invite later (which we can ignore)
+	}
+
 	if err := d.DisableRouteAll(); err != nil {
 		d.sendResult(enc, req.ID, protocol.ConnectionResult{
 			Success: false,

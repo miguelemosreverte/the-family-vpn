@@ -186,6 +186,31 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_handshakes_timestamp ON handshakes(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_handshakes_node_name ON handshakes(node_name);
+
+	-- ==========================================================================
+	-- Connection Intent Protocol: Client State Tracking
+	-- ==========================================================================
+	-- This table tracks the connection state of each client as seen by the server.
+	-- Used to determine whether a client should receive a RECONNECT_INVITE after
+	-- server restart.
+	--
+	-- The protocol:
+	-- 1. When client connects with routing enabled, server records state=connected_routing
+	-- 2. When client sends DISCONNECT_INTENT, server updates state=disconnected_intentional
+	-- 3. After server restart, clients with state=connected_routing (no intent) get invited
+	-- 4. Clients with state=disconnected_intentional are NOT invited (user chose to disconnect)
+	-- ==========================================================================
+	CREATE TABLE IF NOT EXISTS client_states (
+		vpn_address TEXT PRIMARY KEY,          -- Client's VPN IP (unique identifier)
+		node_name TEXT NOT NULL,               -- Client's node name
+		state TEXT NOT NULL,                   -- connected_routing, connected_no_routing, disconnected_intentional
+		route_all INTEGER NOT NULL DEFAULT 0,  -- Was routing enabled (1/0)
+		connected_at INTEGER,                  -- When client connected (unix ms)
+		disconnected_at INTEGER,               -- When client disconnected (unix ms)
+		disconnect_reason TEXT,                -- Reason for disconnect if intentional
+		last_updated INTEGER NOT NULL          -- Last state update timestamp
+	);
+	CREATE INDEX IF NOT EXISTS idx_client_states_state ON client_states(state);
 	`
 	_, err := s.db.Exec(schema)
 	return err
@@ -693,4 +718,204 @@ func (s *Store) GetHandshakeHistory(nodeName string, limit int) ([]HandshakeReco
 	}
 
 	return records, total, nil
+}
+
+// =============================================================================
+// Connection Intent Protocol: Client State Management
+// =============================================================================
+
+// ClientState represents the connection state of a client as tracked by the server.
+type ClientState struct {
+	VPNAddress       string     `json:"vpn_address"`
+	NodeName         string     `json:"node_name"`
+	State            string     `json:"state"` // connected_routing, connected_no_routing, disconnected_intentional
+	RouteAll         bool       `json:"route_all"`
+	ConnectedAt      *time.Time `json:"connected_at,omitempty"`
+	DisconnectedAt   *time.Time `json:"disconnected_at,omitempty"`
+	DisconnectReason string     `json:"disconnect_reason,omitempty"`
+	LastUpdated      time.Time  `json:"last_updated"`
+}
+
+// Client state constants
+const (
+	ClientStateConnectedRouting   = "connected_routing"    // Connected with routing enabled
+	ClientStateConnectedNoRouting = "connected_no_routing" // Connected without routing
+	ClientStateDisconnectedIntent = "disconnected_intentional" // User requested disconnect
+)
+
+// SetClientConnected records that a client has connected.
+// Called by the server when a client establishes a VPN connection.
+func (s *Store) SetClientConnected(vpnAddress, nodeName string, routeAll bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UnixMilli()
+	state := ClientStateConnectedNoRouting
+	if routeAll {
+		state = ClientStateConnectedRouting
+	}
+	routeAllInt := 0
+	if routeAll {
+		routeAllInt = 1
+	}
+
+	_, err := s.db.Exec(`
+		INSERT INTO client_states (vpn_address, node_name, state, route_all, connected_at, last_updated)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(vpn_address) DO UPDATE SET
+			node_name = excluded.node_name,
+			state = excluded.state,
+			route_all = excluded.route_all,
+			connected_at = excluded.connected_at,
+			disconnected_at = NULL,
+			disconnect_reason = NULL,
+			last_updated = excluded.last_updated
+	`, vpnAddress, nodeName, state, routeAllInt, now, now)
+	return err
+}
+
+// SetClientRouteAll updates whether a client has routing enabled.
+// Called when client enables/disables VPN routing while connected.
+func (s *Store) SetClientRouteAll(vpnAddress string, routeAll bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UnixMilli()
+	state := ClientStateConnectedNoRouting
+	if routeAll {
+		state = ClientStateConnectedRouting
+	}
+	routeAllInt := 0
+	if routeAll {
+		routeAllInt = 1
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE client_states
+		SET state = ?, route_all = ?, last_updated = ?
+		WHERE vpn_address = ?
+	`, state, routeAllInt, now, vpnAddress)
+	return err
+}
+
+// SetClientDisconnectedIntentional records that a client intentionally disconnected.
+// Called when server receives DISCONNECT_INTENT from a client.
+func (s *Store) SetClientDisconnectedIntentional(vpnAddress, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().UnixMilli()
+
+	_, err := s.db.Exec(`
+		UPDATE client_states
+		SET state = ?, disconnected_at = ?, disconnect_reason = ?, last_updated = ?
+		WHERE vpn_address = ?
+	`, ClientStateDisconnectedIntent, now, reason, now, vpnAddress)
+	return err
+}
+
+// GetClientsForReconnectInvite returns clients that should receive a RECONNECT_INVITE.
+// These are clients that:
+// 1. Were connected with routing enabled (state = connected_routing)
+// 2. Did NOT send a DISCONNECT_INTENT (state != disconnected_intentional)
+// This is called after server restart to determine which clients to invite back.
+func (s *Store) GetClientsForReconnectInvite() ([]ClientState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.db.Query(`
+		SELECT vpn_address, node_name, state, route_all, connected_at, disconnected_at, disconnect_reason, last_updated
+		FROM client_states
+		WHERE state = ?
+	`, ClientStateConnectedRouting)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clients []ClientState
+	for rows.Next() {
+		var c ClientState
+		var routeAllInt int
+		var connectedAt, disconnectedAt, lastUpdated sql.NullInt64
+		var disconnectReason sql.NullString
+
+		if err := rows.Scan(&c.VPNAddress, &c.NodeName, &c.State, &routeAllInt, &connectedAt, &disconnectedAt, &disconnectReason, &lastUpdated); err != nil {
+			return nil, err
+		}
+
+		c.RouteAll = routeAllInt == 1
+		if connectedAt.Valid {
+			t := time.UnixMilli(connectedAt.Int64)
+			c.ConnectedAt = &t
+		}
+		if disconnectedAt.Valid {
+			t := time.UnixMilli(disconnectedAt.Int64)
+			c.DisconnectedAt = &t
+		}
+		c.DisconnectReason = disconnectReason.String
+		if lastUpdated.Valid {
+			c.LastUpdated = time.UnixMilli(lastUpdated.Int64)
+		}
+
+		clients = append(clients, c)
+	}
+
+	return clients, nil
+}
+
+// GetClientState returns the current state of a specific client.
+func (s *Store) GetClientState(vpnAddress string) (*ClientState, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row := s.db.QueryRow(`
+		SELECT vpn_address, node_name, state, route_all, connected_at, disconnected_at, disconnect_reason, last_updated
+		FROM client_states
+		WHERE vpn_address = ?
+	`, vpnAddress)
+
+	var c ClientState
+	var routeAllInt int
+	var connectedAt, disconnectedAt, lastUpdated sql.NullInt64
+	var disconnectReason sql.NullString
+
+	if err := row.Scan(&c.VPNAddress, &c.NodeName, &c.State, &routeAllInt, &connectedAt, &disconnectedAt, &disconnectReason, &lastUpdated); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	c.RouteAll = routeAllInt == 1
+	if connectedAt.Valid {
+		t := time.UnixMilli(connectedAt.Int64)
+		c.ConnectedAt = &t
+	}
+	if disconnectedAt.Valid {
+		t := time.UnixMilli(disconnectedAt.Int64)
+		c.DisconnectedAt = &t
+	}
+	c.DisconnectReason = disconnectReason.String
+	if lastUpdated.Valid {
+		c.LastUpdated = time.UnixMilli(lastUpdated.Int64)
+	}
+
+	return &c, nil
+}
+
+// ClearAllClientStates resets all client states (used during server shutdown/restart).
+func (s *Store) ClearAllClientStates() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Don't delete - just mark as disconnected without intent (so they can be invited back)
+	// Clients that sent DISCONNECT_INTENT keep their state
+	now := time.Now().UnixMilli()
+	_, err := s.db.Exec(`
+		UPDATE client_states
+		SET disconnected_at = ?, last_updated = ?
+		WHERE state != ?
+	`, now, now, ClientStateDisconnectedIntent)
+	return err
 }
