@@ -1556,6 +1556,13 @@ type PeerDiagnostic struct {
 	SSHWarning      string `json:"ssh_warning,omitempty"`
 }
 
+// RecentEvent represents a recent lifecycle event for diagnostics.
+type RecentEvent struct {
+	Timestamp string `json:"timestamp"`
+	Event     string `json:"event"`
+	Reason    string `json:"reason"`
+}
+
 // DiagnosticsReport holds all diagnostic results.
 type DiagnosticsReport struct {
 	Timestamp   string             `json:"timestamp"`
@@ -1569,6 +1576,8 @@ type DiagnosticsReport struct {
 	} `json:"local_node"`
 	// Network Peers section
 	Peers []PeerDiagnostic `json:"peers"`
+	// Recent Events (for WHY explanations)
+	RecentEvents []RecentEvent `json:"recent_events,omitempty"`
 	// Summary
 	Summary struct {
 		Passed int `json:"passed"`
@@ -1623,6 +1632,10 @@ func runDiagnostics(nodeAddr string, verbose bool) *DiagnosticsReport {
 	// === NETWORK PEERS ===
 	// Get peer list and run diagnostics for each
 	report.Peers = checkNetworkPeers(nodeAddr, localVersion)
+
+	// === RECENT EVENTS ===
+	// Fetch recent lifecycle events to explain WHY something might be wrong
+	report.RecentEvents = getRecentEvents(nodeAddr)
 
 	// Calculate summary from local checks
 	for _, check := range report.LocalNode.Checks {
@@ -1998,6 +2011,14 @@ func printDiagnostics(report *DiagnosticsReport, verbose bool) {
 		}
 		fmt.Println()
 	}
+
+	// Print recent events that might explain issues
+	printRecentEvents(report.RecentEvents)
+
+	// Always show next steps for exploration
+	fmt.Println()
+	printNextSteps(report)
+	fmt.Println()
 }
 
 func printCheck(check DiagnosticResult, verbose bool) {
@@ -2101,4 +2122,74 @@ func printRecommendation(checkName string) {
 		fmt.Println("  - DNS may be misconfigured - check /etc/resolv.conf")
 		fmt.Println("  - Try flushing DNS: sudo dscacheutil -flushcache")
 	}
+}
+
+// getRecentEvents fetches recent lifecycle events to help explain issues.
+func getRecentEvents(nodeAddr string) []RecentEvent {
+	events := []RecentEvent{}
+
+	client, err := cli.NewClient(nodeAddr)
+	if err != nil {
+		return events
+	}
+	defer client.Close()
+
+	result, err := client.Lifecycle(5) // Get last 5 events
+	if err != nil {
+		return events
+	}
+
+	for _, e := range result.Events {
+		// Only include events that might explain issues
+		if e.Event == "CRASH" || e.Event == "CONNECTION_LOST" || e.Event == "SIGNAL" {
+			events = append(events, RecentEvent{
+				Timestamp: e.Timestamp,
+				Event:     e.Event,
+				Reason:    e.Reason,
+			})
+		}
+	}
+
+	return events
+}
+
+// printRecentEvents shows recent events that might explain issues.
+func printRecentEvents(events []RecentEvent) {
+	if len(events) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println(colorCyan + "Recent Events (Why something might be wrong)" + colorReset)
+	fmt.Println("───────────────────────────────────────────────────────────────")
+
+	for _, e := range events {
+		ts, _ := time.Parse(time.RFC3339, e.Timestamp)
+		tsStr := ts.Local().Format("2006-01-02 15:04:05")
+
+		eventColor := colorGray
+		switch e.Event {
+		case "CRASH":
+			eventColor = colorRed
+		case "CONNECTION_LOST":
+			eventColor = colorYellow
+		case "SIGNAL":
+			eventColor = colorBlue
+		}
+
+		fmt.Printf("  %s%s%s %s - %s\n", eventColor, e.Event, colorReset, tsStr, e.Reason)
+	}
+}
+
+// printNextSteps shows helpful CLI commands based on the diagnosis.
+func printNextSteps(report *DiagnosticsReport) {
+	fmt.Println(colorCyan + "Explore Further (CLI Commands)" + colorReset)
+	fmt.Println("───────────────────────────────────────────────────────────────")
+	fmt.Println("  View logs:          vpn logs --earliest=-1h --level=ERROR,WARN")
+	fmt.Println("  View all events:    vpn lifecycle --limit=20")
+	fmt.Println("  Check crashes:      vpn crashes --since=-24h")
+	fmt.Println("  Check connection:   vpn connection-status")
+	fmt.Println("  SSH to peer:        vpn ssh <peer-name> --exec")
+	fmt.Println("  Enable VPN routing: vpn connect")
+	fmt.Println("  Disable routing:    vpn disconnect")
 }
